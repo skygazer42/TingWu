@@ -3,11 +3,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Literal, Tuple
 
-try:
-    from pypinyin import pinyin, Style
-    HAS_PYPINYIN = True
-except ImportError:
-    HAS_PYPINYIN = False
+from pypinyin import pinyin, Style
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,21 +26,26 @@ class Phoneme:
                 self.is_word_end, self.is_tone, self.char_start, self.char_end)
 
 
-# 相似音素集合 (用于模糊匹配)
+# 相似音素集合 (用于模糊匹配) - 基于 CapsWriter-Offline
 SIMILAR_PHONEMES = [
+    # 前后鼻音
     {'an', 'ang'}, {'en', 'eng'}, {'in', 'ing'},
     {'ian', 'iang'}, {'uan', 'uang'},
+    # 平翘舌
     {'z', 'zh'}, {'c', 'ch'}, {'s', 'sh'},
-    {'l', 'n'}, {'f', 'h'}, {'ai', 'ei'}
+    # 鼻音/边音
+    {'l', 'n'},
+    # 唇齿音/声门音
+    {'f', 'h'},
+    # 常见易混韵母
+    {'ai', 'ei'}, {'o', 'uo'}, {'e', 'ie'},
+    # 清浊音/送气不送气
+    {'p', 'b'}, {'t', 'd'}, {'k', 'g'},
 ]
 
 
 def get_phoneme_info(text: str, split_char: bool = True) -> List[Phoneme]:
     """提取文本的音素序列"""
-    if not HAS_PYPINYIN:
-        return [Phoneme(c, 'zh', char_start=i, char_end=i+1)
-                for i, c in enumerate(text)]
-
     seq = []
     pos = 0
 
