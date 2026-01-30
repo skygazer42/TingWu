@@ -3,15 +3,10 @@ import os
 from pathlib import Path
 from typing import AsyncGenerator
 import aiofiles
+import ffmpeg
 from fastapi import UploadFile, HTTPException
 
 from src.config import settings
-
-try:
-    import ffmpeg
-    HAS_FFMPEG = True
-except ImportError:
-    HAS_FFMPEG = False
 
 
 async def process_audio_file(file: UploadFile) -> AsyncGenerator[bytes, None]:
@@ -24,23 +19,19 @@ async def process_audio_file(file: UploadFile) -> AsyncGenerator[bytes, None]:
             content = await file.read()
             await f.write(content)
 
-        if HAS_FFMPEG:
-            try:
-                audio_bytes, _ = (
-                    ffmpeg
-                    .input(str(temp_path), threads=0)
-                    .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=16000)
-                    .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
-                )
-                yield audio_bytes
-            except ffmpeg.Error as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"音频处理失败: {e.stderr.decode() if e.stderr else str(e)}"
-                )
-        else:
-            # 无 ffmpeg 时直接返回原始内容
-            yield content
+        try:
+            audio_bytes, _ = (
+                ffmpeg
+                .input(str(temp_path), threads=0)
+                .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=16000)
+                .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
+            )
+            yield audio_bytes
+        except ffmpeg.Error as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"音频处理失败: {e.stderr.decode() if e.stderr else str(e)}"
+            )
 
     finally:
         if temp_path.exists():

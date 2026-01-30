@@ -1,0 +1,14 @@
+"""LLM 角色系统 - 不同场景的系统提示词"""
+from src.core.llm.roles.base import Role, RoleRegistry, get_role
+from src.core.llm.roles.default import DefaultRole
+from src.core.llm.roles.translator import TranslatorRole
+from src.core.llm.roles.code import CodeRole
+
+__all__ = [
+    'Role',
+    'RoleRegistry',
+    'get_role',
+    'DefaultRole',
+    'TranslatorRole',
+    'CodeRole',
+]

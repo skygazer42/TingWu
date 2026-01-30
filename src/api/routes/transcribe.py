@@ -17,6 +17,8 @@ async def transcribe_audio(
     file: UploadFile = File(..., description="音频文件"),
     with_speaker: bool = Form(default=False, description="是否进行说话人识别"),
     apply_hotword: bool = Form(default=True, description="是否应用热词纠错"),
+    apply_llm: bool = Form(default=False, description="是否应用LLM润色"),
+    llm_role: str = Form(default="default", description="LLM角色 (default/translator/code)"),
     hotwords: Optional[str] = Form(default=None, description="额外热词 (空格分隔)"),
 ):
     """
@@ -29,10 +31,12 @@ async def transcribe_audio(
 
     try:
         async for audio_bytes in process_audio_file(file):
-            result = transcription_engine.transcribe(
+            result = await transcription_engine.transcribe_async(
                 audio_bytes,
                 with_speaker=with_speaker,
                 apply_hotword=apply_hotword,
+                apply_llm=apply_llm,
+                llm_role=llm_role,
                 hotwords=hotwords,
             )
 

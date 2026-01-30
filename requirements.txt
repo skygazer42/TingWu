@@ -27,6 +27,9 @@ jieba>=0.42.1
 requests>=2.31.0
 httpx>=0.26.0
 
+# File watching
+watchdog>=3.0.0
+
 # Utils
 aiofiles>=23.2.0
 python-dotenv>=1.0.0

@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, Mock, MagicMock
+from unittest.mock import patch, Mock, MagicMock, AsyncMock
 import io
 
 @pytest.fixture
@@ -32,13 +32,18 @@ def test_root_endpoint(client):
 
 def test_transcribe_endpoint(client):
     """测试转写接口"""
-    with patch('src.core.engine.transcription_engine') as mock_engine:
+    with patch('src.core.engine.transcription_engine') as mock_engine, \
+         patch('src.api.routes.transcribe.process_audio_file') as mock_process:
         mock_engine.transcribe.return_value = {
             "text": "你好世界",
             "sentences": [{"text": "你好世界", "start": 0, "end": 1000}],
             "raw_text": "你好世界"
         }
         mock_engine._hotwords_loaded = False
+
+        async def fake_process(file):
+            yield b"\x00" * 32000
+        mock_process.side_effect = fake_process
 
         audio_content = b"fake_audio_content_wav_header"
         files = {"file": ("test.wav", io.BytesIO(audio_content), "audio/wav")}
@@ -52,7 +57,8 @@ def test_transcribe_endpoint(client):
 
 def test_transcribe_with_speaker(client):
     """测试带说话人的转写"""
-    with patch('src.core.engine.transcription_engine') as mock_engine:
+    with patch('src.core.engine.transcription_engine') as mock_engine, \
+         patch('src.api.routes.transcribe.process_audio_file') as mock_process:
         mock_engine.transcribe.return_value = {
             "text": "你好",
             "sentences": [{"text": "你好", "start": 0, "end": 500, "speaker": "说话人甲", "speaker_id": 0}],
@@ -60,6 +66,10 @@ def test_transcribe_with_speaker(client):
             "raw_text": "你好"
         }
         mock_engine._hotwords_loaded = False
+
+        async def fake_process(file):
+            yield b"\x00" * 16000
+        mock_process.side_effect = fake_process
 
         files = {"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")}
         data = {"with_speaker": "true"}

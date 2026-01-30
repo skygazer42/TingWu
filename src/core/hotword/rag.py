@@ -2,41 +2,29 @@
 from collections import defaultdict
 from typing import List, Dict, Tuple
 
-try:
-    import numpy as np
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
-
-try:
-    from numba import njit
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
-
+import numpy as np
+from numba import njit
 from src.core.hotword.phoneme import Phoneme
 
+@njit(cache=True)
+def _fuzzy_substring_numba(main, sub):
+    """Numba 加速的模糊子串距离计算"""
+    n, m = len(sub), len(main)
+    if n == 0 or m == 0:
+        return float(n)
 
-if HAS_NUMBA and HAS_NUMPY:
-    @njit(cache=True)
-    def _fuzzy_substring_numba(main, sub):
-        """Numba 加速的模糊子串距离计算"""
-        n, m = len(sub), len(main)
-        if n == 0 or m == 0:
-            return float(n)
+    dp = np.zeros((n+1, m+1), dtype=np.float32)
+    for i in range(1, n+1):
+        dp[i, 0] = float(i)
 
-        dp = np.zeros((n+1, m+1), dtype=np.float32)
-        for i in range(1, n+1):
-            dp[i, 0] = float(i)
+    for i in range(1, n+1):
+        for j in range(1, m+1):
+            cost = 0.0 if sub[i-1] == main[j-1] else 1.0
+            dp[i, j] = min(dp[i-1, j] + 1.0,
+                          dp[i, j-1] + 1.0,
+                          dp[i-1, j-1] + cost)
 
-        for i in range(1, n+1):
-            for j in range(1, m+1):
-                cost = 0.0 if sub[i-1] == main[j-1] else 1.0
-                dp[i, j] = min(dp[i-1, j] + 1.0,
-                              dp[i, j-1] + 1.0,
-                              dp[i-1, j-1] + cost)
-
-        return np.min(dp[n, 1:])
+    return np.min(dp[n, 1:])
 
 
 class FastRAG:
@@ -55,10 +43,8 @@ class FastRAG:
             if p.value not in self.ph_to_id:
                 self.ph_to_id[p.value] = len(self.ph_to_id) + 1
             ids.append(self.ph_to_id[p.value])
+        return np.array(ids, dtype=np.int32)
 
-        if HAS_NUMPY:
-            return np.array(ids, dtype=np.int32)
-        return ids
 
     def add_hotwords(self, hotwords: Dict[str, List[Phoneme]]):
         """添加热词到索引"""
@@ -77,11 +63,7 @@ class FastRAG:
             return []
 
         input_codes = self._encode(input_phs)
-        if HAS_NUMPY:
-            unique = set(input_codes.tolist())
-        else:
-            unique = set(input_codes)
-
+        unique = set(input_codes.tolist())
         candidates = []
         for c in unique:
             candidates.extend(self.index.get(c, []))
@@ -93,12 +75,7 @@ class FastRAG:
             if hw in seen or len(cands) > len(input_codes) + 3:
                 continue
             seen.add(hw)
-
-            if HAS_NUMBA and HAS_NUMPY:
-                dist = _fuzzy_substring_numba(input_codes, cands)
-            else:
-                dist = self._python_dist(input_codes, cands)
-
+            dist = _fuzzy_substring_numba(input_codes, cands)
             score = 1.0 - (dist / len(cands))
             if score >= self.threshold:
                 results.append((hw, round(float(score), 3)))

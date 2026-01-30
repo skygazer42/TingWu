@@ -1,0 +1,410 @@
+"""异步转写 API - 参考 FunASR_API
+
+支持：
+- URL 音频转写（异步）
+- 视频转写
+- 任务结果查询
+- Whisper 兼容接口
+"""
+import logging
+import os
+import tempfile
+from datetime import timedelta
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
+
+import httpx
+import ffmpeg
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from src.config import settings
+from src.core.engine import transcription_engine
+from src.core.task_manager import task_manager, TaskStatus
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1", tags=["async"])
+
+
+def ms_to_srt_time(milliseconds: int) -> str:
+    """将毫秒转换为 SRT 格式时间 (HH:MM:SS.mmm)"""
+    td = timedelta(milliseconds=milliseconds)
+    hours = td.seconds // 3600
+    minutes = (td.seconds // 60) % 60
+    seconds = td.seconds % 60
+    ms = td.microseconds // 1000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
+
+
+def convert_audio_to_pcm(input_path: str, output_path: str) -> bool:
+    """
+    将音频/视频转换为 16kHz 单声道 PCM WAV
+
+    Args:
+        input_path: 输入文件路径
+        output_path: 输出文件路径
+
+    Returns:
+        是否成功
+    """
+    try:
+        (
+            ffmpeg
+            .input(input_path, threads=0)
+            .output(output_path, format="wav", acodec="pcm_s16le", ac=1, ar=16000)
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+        logger.info(f"Audio converted: {input_path} -> {output_path}")
+        return True
+    except ffmpeg.Error as e:
+        logger.error(f"FFmpeg error: {e.stderr.decode() if e.stderr else str(e)}")
+        raise
+
+
+def extract_audio_from_video(video_path: str, audio_path: str) -> bool:
+    """
+    从视频中提取音频
+
+    Args:
+        video_path: 视频文件路径
+        audio_path: 输出音频路径
+
+    Returns:
+        是否成功
+    """
+    try:
+        (
+            ffmpeg
+            .input(video_path)
+            .output(audio_path, acodec="pcm_s16le", ac=1, ar=16000)
+            .overwrite_output()
+            .run(capture_stdout=True, capture_stderr=True)
+        )
+        logger.info(f"Audio extracted from video: {video_path}")
+        return True
+    except ffmpeg.Error as e:
+        logger.error(f"Video extraction error: {e.stderr.decode() if e.stderr else str(e)}")
+        raise
+
+
+def _handle_url_transcribe(payload: dict) -> dict:
+    """
+    处理 URL 转写任务
+
+    Args:
+        payload: {"url": str, "with_speaker": bool, "apply_hotword": bool}
+
+    Returns:
+        转写结果
+    """
+    url = payload["url"]
+    with_speaker = payload.get("with_speaker", False)
+    apply_hotword = payload.get("apply_hotword", True)
+
+    # 解析 URL 获取文件扩展名
+    parsed = urlparse(url)
+    filename = os.path.basename(parsed.path)
+    ext = os.path.splitext(filename)[1].lower() or ".wav"
+
+    temp_download = None
+    temp_wav = None
+
+    try:
+        # 下载文件
+        logger.info(f"Downloading audio from: {url}")
+        with httpx.Client(timeout=60.0) as client:
+            response = client.get(url, follow_redirects=True)
+            response.raise_for_status()
+
+            temp_download = tempfile.NamedTemporaryFile(
+                delete=False, suffix=ext, dir=str(settings.uploads_dir)
+            )
+            temp_download.write(response.content)
+            temp_download.close()
+
+        # 转换格式
+        temp_wav = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".wav", dir=str(settings.uploads_dir)
+        )
+        temp_wav.close()
+
+        convert_audio_to_pcm(temp_download.name, temp_wav.name)
+
+        # 读取转换后的音频
+        with open(temp_wav.name, "rb") as f:
+            audio_bytes = f.read()
+
+        # 执行转写
+        result = transcription_engine.transcribe(
+            audio_bytes,
+            with_speaker=with_speaker,
+            apply_hotword=apply_hotword
+        )
+
+        # 格式化结果
+        sentences = []
+        for i, sent in enumerate(result.get("sentences", []), 1):
+            sentences.append({
+                "sentence_index": i,
+                "text": sent["text"],
+                "start": ms_to_srt_time(sent["start"]),
+                "end": ms_to_srt_time(sent["end"]),
+                "speaker": sent.get("speaker")
+            })
+
+        return {
+            "text": result.get("text", ""),
+            "sentences": sentences,
+            "raw_text": result.get("raw_text", "")
+        }
+
+    finally:
+        # 清理临时文件
+        if temp_download and os.path.exists(temp_download.name):
+            os.unlink(temp_download.name)
+        if temp_wav and os.path.exists(temp_wav.name):
+            os.unlink(temp_wav.name)
+
+
+# 注册任务处理器
+task_manager.register_handler("url_transcribe", _handle_url_transcribe)
+
+
+@router.post("/trans/url")
+async def transcribe_from_url(
+    audio_url: str = Form(..., description="音频/视频 URL"),
+    with_speaker: bool = Form(default=False, description="是否识别说话人"),
+    apply_hotword: bool = Form(default=True, description="是否应用热词纠错"),
+):
+    """
+    从 URL 转写音频（异步）
+
+    提交任务后返回 task_id，通过 /result 接口查询结果。
+    支持的格式：wav, mp3, m4a, flac, ogg, mp4, avi, mkv 等
+    """
+    task_id = task_manager.submit("url_transcribe", {
+        "url": audio_url,
+        "with_speaker": with_speaker,
+        "apply_hotword": apply_hotword
+    })
+
+    return {
+        "code": 200,
+        "status": "success",
+        "message": "任务已提交",
+        "data": {"task_id": task_id}
+    }
+
+
+@router.post("/result")
+async def get_task_result(
+    task_id: str = Form(..., description="任务 ID"),
+    delete: bool = Form(default=True, description="获取后是否删除结果"),
+):
+    """
+    获取异步任务结果
+
+    - PENDING: 任务等待中
+    - PROCESSING: 任务处理中
+    - COMPLETED: 任务完成，返回结果
+    - FAILED: 任务失败，返回错误信息
+    """
+    result = task_manager.get_result(task_id, delete=delete)
+
+    if result is None:
+        return {
+            "code": 404,
+            "status": "error",
+            "message": "任务不存在或已过期"
+        }
+
+    if result.status == TaskStatus.PENDING:
+        return {
+            "code": 202,
+            "status": "pending",
+            "message": "任务等待中",
+            "data": {"task_id": task_id}
+        }
+
+    if result.status == TaskStatus.PROCESSING:
+        return {
+            "code": 202,
+            "status": "processing",
+            "message": "任务处理中",
+            "data": {"task_id": task_id}
+        }
+
+    if result.status == TaskStatus.FAILED:
+        return {
+            "code": 500,
+            "status": "error",
+            "message": result.error or "任务失败",
+            "data": {"task_id": task_id}
+        }
+
+    # COMPLETED
+    return {
+        "code": 200,
+        "status": "success",
+        "message": "获取结果成功",
+        "data": result.result
+    }
+
+
+@router.post("/asr")
+async def asr_whisper_compatible(
+    file: UploadFile = File(..., description="音频/视频文件"),
+    file_type: str = Form(default="audio", description="文件类型: audio 或 video"),
+    with_speaker: bool = Form(default=True, description="是否识别说话人"),
+    apply_hotword: bool = Form(default=True, description="是否应用热词纠错"),
+):
+    """
+    Whisper ASR WebService 兼容接口
+
+    返回格式兼容 https://ahmetoner.com/whisper-asr-webservice/endpoints
+    """
+    temp_file = None
+    temp_wav = None
+
+    try:
+        # 保存上传文件
+        suffix = Path(file.filename).suffix if file.filename else ".wav"
+        temp_file = tempfile.NamedTemporaryFile(
+            delete=False, suffix=suffix, dir=str(settings.uploads_dir)
+        )
+        content = await file.read()
+        temp_file.write(content)
+        temp_file.close()
+
+        # 视频提取音频
+        if file_type == "video":
+            temp_wav = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".wav", dir=str(settings.uploads_dir)
+            )
+            temp_wav.close()
+            extract_audio_from_video(temp_file.name, temp_wav.name)
+            audio_path = temp_wav.name
+        else:
+            # 音频转换格式
+            temp_wav = tempfile.NamedTemporaryFile(
+                delete=False, suffix=".wav", dir=str(settings.uploads_dir)
+            )
+            temp_wav.close()
+            convert_audio_to_pcm(temp_file.name, temp_wav.name)
+            audio_path = temp_wav.name
+
+        # 读取转换后的音频
+        with open(audio_path, "rb") as f:
+            audio_bytes = f.read()
+
+        # 执行转写
+        result = transcription_engine.transcribe(
+            audio_bytes,
+            with_speaker=with_speaker,
+            apply_hotword=apply_hotword
+        )
+
+        # Whisper 兼容格式
+        segments = []
+        for i, sent in enumerate(result.get("sentences", []), 1):
+            segments.append({
+                "sentence_index": i,
+                "text": sent["text"],
+                "start": ms_to_srt_time(sent["start"]),
+                "end": ms_to_srt_time(sent["end"]),
+                "speaker": sent.get("speaker")
+            })
+
+        return {
+            "text": result.get("text", ""),
+            "segments": segments,
+            "language": "zh"
+        }
+
+    except ffmpeg.Error as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"音频处理失败: {e.stderr.decode() if e.stderr else str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"ASR error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"转写失败: {str(e)}")
+
+    finally:
+        if temp_file and os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
+        if temp_wav and os.path.exists(temp_wav.name):
+            os.unlink(temp_wav.name)
+
+
+@router.post("/trans/video")
+async def transcribe_video(
+    file: UploadFile = File(..., description="视频文件"),
+    with_speaker: bool = Form(default=False, description="是否识别说话人"),
+    apply_hotword: bool = Form(default=True, description="是否应用热词纠错"),
+    apply_llm: bool = Form(default=False, description="是否应用 LLM 润色"),
+    llm_role: str = Form(default="default", description="LLM 角色"),
+):
+    """
+    视频文件转写
+
+    自动提取视频中的音频并转写。
+    支持格式：mp4, avi, mkv, mov, webm 等
+    """
+    temp_video = None
+    temp_audio = None
+
+    try:
+        # 保存视频文件
+        suffix = Path(file.filename).suffix if file.filename else ".mp4"
+        temp_video = tempfile.NamedTemporaryFile(
+            delete=False, suffix=suffix, dir=str(settings.uploads_dir)
+        )
+        content = await file.read()
+        temp_video.write(content)
+        temp_video.close()
+
+        # 提取音频
+        temp_audio = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".wav", dir=str(settings.uploads_dir)
+        )
+        temp_audio.close()
+        extract_audio_from_video(temp_video.name, temp_audio.name)
+
+        # 读取音频
+        with open(temp_audio.name, "rb") as f:
+            audio_bytes = f.read()
+
+        # 执行转写
+        result = await transcription_engine.transcribe_async(
+            audio_bytes,
+            with_speaker=with_speaker,
+            apply_hotword=apply_hotword,
+            apply_llm=apply_llm,
+            llm_role=llm_role
+        )
+
+        return {
+            "code": 0,
+            "text": result.get("text", ""),
+            "sentences": result.get("sentences", []),
+            "transcript": result.get("transcript"),
+            "raw_text": result.get("raw_text")
+        }
+
+    except ffmpeg.Error as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"视频处理失败: {e.stderr.decode() if e.stderr else str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Video transcribe error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"转写失败: {str(e)}")
+
+    finally:
+        if temp_video and os.path.exists(temp_video.name):
+            os.unlink(temp_video.name)
+        if temp_audio and os.path.exists(temp_audio.name):
+            os.unlink(temp_audio.name)

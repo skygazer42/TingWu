@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     llm_enable: bool = False
     llm_model: str = "qwen2.5:7b"
     llm_base_url: str = "http://localhost:11434"
+    llm_role: str = "default"  # default, translator, code
+
+    # 文本后处理配置
+    itn_enable: bool = True                    # 中文数字格式化 (如 "三百五十" → "350")
+    zh_convert_enable: bool = False            # 繁简转换
+    zh_convert_locale: str = "zh-hans"         # 目标区域: zh-hans/zh-hant/zh-tw/zh-hk
+    punc_convert_enable: bool = False          # 标点转换 (全角→半角)
+    punc_add_space: bool = True                # 标点后添加空格
 
     # WebSocket 配置
     ws_chunk_size: int = 9600  # 600ms @ 16kHz

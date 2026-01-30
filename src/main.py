@@ -20,14 +20,30 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     logger.info(f"Starting {settings.app_name} v{settings.version}")
 
-    # 加载热词 (延迟加载模型)
+    # 加载所有热词相关文件
     from src.core.engine import transcription_engine
-    transcription_engine.load_hotwords()
+    transcription_engine.load_all()
+
+    # 启动热词文件监视器
+    from src.core.hotword.watcher import setup_hotword_watcher, stop_hotword_watcher
+    setup_hotword_watcher(
+        watch_dir=str(settings.hotwords_dir),
+        on_hotwords_change=lambda path: transcription_engine.load_hotwords(path),
+        on_rules_change=lambda path: transcription_engine.load_rules(path),
+        on_rectify_change=lambda path: transcription_engine.load_rectify_history(path),
+    )
+
+    # 启动异步任务管理器
+    from src.core.task_manager import task_manager
+    task_manager.start()
 
     logger.info("Service ready!")
 
     yield
 
+    # 停止任务管理器
+    task_manager.stop()
+    stop_hotword_watcher()
     logger.info("Shutting down...")
 
 
