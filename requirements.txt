@@ -1,0 +1,34 @@
+# Core
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
+python-multipart>=0.0.6
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# FunASR
+funasr>=1.1.0
+torch>=2.0.0
+torchaudio>=2.0.0
+modelscope>=1.10.0
+
+# Audio processing
+librosa>=0.10.0
+soundfile>=0.12.1
+ffmpeg-python>=0.2.0
+numpy>=1.24.0
+
+# Hot word optimization (from CapsWriter)
+pypinyin>=0.50.0
+numba>=0.58.0
+jieba>=0.42.1
+
+# LLM (optional)
+requests>=2.31.0
+httpx>=0.26.0
+
+# Utils
+aiofiles>=23.2.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+rich>=13.7.0

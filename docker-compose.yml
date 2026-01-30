@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  tingwu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tingwu-speech-service:latest
+    container_name: tingwu-service
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+      - model-cache:/root/.cache/modelscope
+    environment:
+      - DEVICE=cuda
+      - NGPU=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  model-cache:
