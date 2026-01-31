@@ -12,6 +12,7 @@ build/
 # Environment
 .env
 .venv/
+.venv-py39/
 venv/
 ENV/
 
