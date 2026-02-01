@@ -1,0 +1,29 @@
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# 使用官方源 (Docker 内网络通常稳定)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 使用清华 pip 镜像
+COPY requirements.txt .
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+
+# Benchmark 可选依赖
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple funasr-onnx psutil edge-tts noisereduce || true
+
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+COPY configs/ ./configs/
+COPY data/ ./data/
+
+RUN mkdir -p data/benchmark data/models data/uploads data/outputs
+
+CMD ["python", "scripts/benchmark_asr.py", "--help"]

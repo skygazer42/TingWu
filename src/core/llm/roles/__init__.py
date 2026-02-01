@@ -3,6 +3,7 @@ from src.core.llm.roles.base import Role, RoleRegistry, get_role
 from src.core.llm.roles.default import DefaultRole
 from src.core.llm.roles.translator import TranslatorRole
 from src.core.llm.roles.code import CodeRole
+from src.core.llm.roles.corrector import CorrectorRole
 
 __all__ = [
     'Role',
@@ -11,4 +12,5 @@ __all__ = [
     'DefaultRole',
     'TranslatorRole',
     'CodeRole',
+    'CorrectorRole',
 ]

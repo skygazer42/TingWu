@@ -2,6 +2,7 @@
 
 构建包含上下文信息的提示词，用于 LLM 润色语音识别结果。
 """
+import re
 from typing import List, Optional
 
 
@@ -52,17 +53,46 @@ class PromptBuilder:
     - 热词列表
     - 纠错历史
     - 用户输入
+
+    支持 token 管理，自动裁剪历史防止超出上下文限制。
     """
 
-    def __init__(self, system_prompt: str = DEFAULT_SYSTEM_PROMPT):
+    def __init__(self, system_prompt: str = DEFAULT_SYSTEM_PROMPT, max_tokens: int = 4096):
         self.system_prompt = system_prompt
+        self.max_tokens = max_tokens
         self._history: List[dict] = []
+
+    def _estimate_tokens(self, text: str) -> int:
+        """估算 token 数
+
+        中文约 1.5 tokens/字，英文约 1 token/word
+        """
+        if not text:
+            return 0
+        cn_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        en_words = len(re.findall(r'[a-zA-Z]+', text))
+        # 基础开销 + 中文 + 英文
+        return int(cn_chars * 1.5 + en_words + len(text) * 0.1)
+
+    def _trim_history(self, messages: List[dict]) -> List[dict]:
+        """当 token 超过 80% 阈值时，裁剪最早的历史"""
+        total = sum(self._estimate_tokens(m.get('content', '')) for m in messages)
+        threshold = self.max_tokens * 0.8
+
+        while total > threshold and len(messages) > 2:
+            # 保留 system prompt 和最后的 user message
+            messages.pop(1)
+            total = sum(self._estimate_tokens(m.get('content', '')) for m in messages)
+
+        return messages
 
     def build(
         self,
         user_content: str,
         hotwords: Optional[List[str]] = None,
         rectify_context: Optional[str] = None,
+        prev_context: Optional[str] = None,
+        next_context: Optional[str] = None,
         include_history: bool = True,
         max_history: int = 10
     ) -> List[dict]:
@@ -73,6 +103,8 @@ class PromptBuilder:
             user_content: 用户输入文本（语音识别结果）
             hotwords: 热词列表
             rectify_context: 纠错历史上下文（由 RectificationRAG.format_prompt 生成）
+            prev_context: 前文上下文（前一句或多句）
+            next_context: 后文上下文（后一句或多句）
             include_history: 是否包含对话历史
             max_history: 最大历史消息数
 
@@ -97,10 +129,22 @@ class PromptBuilder:
         if rectify_context:
             parts.append(rectify_context)
 
+        # 上下文句子
+        if prev_context or next_context:
+            context_parts = []
+            if prev_context:
+                context_parts.append(f"上文：{prev_context}")
+            if next_context:
+                context_parts.append(f"下文：{next_context}")
+            parts.append("\n".join(context_parts))
+
         # 用户输入
         parts.append(f"用户输入：{user_content}")
 
         messages.append({"role": "user", "content": "\n\n".join(parts)})
+
+        # Token 管理：裁剪历史
+        messages = self._trim_history(messages)
 
         return messages
 

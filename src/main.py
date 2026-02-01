@@ -25,13 +25,15 @@ async def lifespan(app: FastAPI):
     transcription_engine.load_all()
 
     # 启动热词文件监视器
-    from src.core.hotword.watcher import setup_hotword_watcher, stop_hotword_watcher
-    setup_hotword_watcher(
-        watch_dir=str(settings.hotwords_dir),
-        on_hotwords_change=lambda path: transcription_engine.load_hotwords(path),
-        on_rules_change=lambda path: transcription_engine.load_rules(path),
-        on_rectify_change=lambda path: transcription_engine.load_rectify_history(path),
-    )
+    if settings.hotword_watch_enable:
+        from src.core.hotword.watcher import setup_hotword_watcher, stop_hotword_watcher
+        setup_hotword_watcher(
+            watch_dir=str(settings.hotwords_dir),
+            on_hotwords_change=lambda path: transcription_engine.load_hotwords(path),
+            on_rules_change=lambda path: transcription_engine.load_rules(path),
+            on_rectify_change=lambda path: transcription_engine.load_rectify_history(path),
+            debounce_delay=settings.hotword_watch_debounce,
+        )
 
     # 启动异步任务管理器
     from src.core.task_manager import task_manager
@@ -43,7 +45,9 @@ async def lifespan(app: FastAPI):
 
     # 停止任务管理器
     task_manager.stop()
-    stop_hotword_watcher()
+    if settings.hotword_watch_enable:
+        from src.core.hotword.watcher import stop_hotword_watcher
+        stop_hotword_watcher()
     logger.info("Shutting down...")
 
 

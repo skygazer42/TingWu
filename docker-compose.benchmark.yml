@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile.benchmark
+    image: tingwu-benchmark:latest
+    container_name: tingwu-benchmark
+    volumes:
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - model-cache:/root/.cache/modelscope
+      - huggingface-cache:/root/.cache/huggingface
+    environment:
+      - DEVICE=cpu
+    working_dir: /app
+    # 默认运行 benchmark，可以通过 command 覆盖
+    command: >
+      python scripts/benchmark_asr.py
+        --audio data/benchmark/
+        --device cpu
+        --models paraformer onnx
+        --output data/benchmark/results.json
+    tty: true
+    stdin_open: true
+
+volumes:
+  model-cache:
+  huggingface-cache:

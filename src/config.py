@@ -20,12 +20,26 @@ class Settings(BaseSettings):
     uploads_dir: Path = data_dir / "uploads"
     outputs_dir: Path = data_dir / "outputs"
 
-    # FunASR 模型配置
+    # ASR 后端配置
+    asr_backend: Literal["pytorch", "onnx", "sensevoice"] = "pytorch"
+
+    # FunASR 模型配置 (PyTorch 后端)
     asr_model: str = "paraformer-zh"
     asr_model_online: str = "paraformer-zh-streaming"
     vad_model: str = "fsmn-vad"
     punc_model: str = "ct-punc-c"
     spk_model: str = "cam++"
+
+    # VAD 参数优化
+    vad_max_segment_ms: int = 60000              # VAD 单段最大时长 (毫秒)
+    vad_speech_noise_thres: float = 0.8          # 语音/噪声阈值
+
+    # ONNX 后端配置
+    onnx_quantize: bool = True  # 启用 INT8 量化
+
+    # SenseVoice 后端配置
+    sensevoice_model: str = "iic/SenseVoiceSmall"
+    sensevoice_language: str = "zh"
 
     # 设备配置
     device: Literal["cuda", "cpu"] = "cuda"
@@ -35,23 +49,69 @@ class Settings(BaseSettings):
     # 热词配置
     hotwords_file: str = "hotwords.txt"
     hotwords_threshold: float = 0.85
+    hotword_injection_enable: bool = True       # 热词前向注入 (传递给ASR模型)
+    hotword_injection_max: int = 50             # 最大注入热词数
+    hotword_watch_enable: bool = True           # 热词文件热加载
+    hotword_watch_debounce: float = 3.0         # 热加载防抖秒数
 
     # LLM 优化配置 (可选)
     llm_enable: bool = False
     llm_model: str = "qwen2.5:7b"
     llm_base_url: str = "http://localhost:11434"
-    llm_role: str = "default"  # default, translator, code
+    llm_role: str = "default"  # default, translator, code, corrector
+    llm_context_sentences: int = 1  # 上下文句子数 (用于多句润色)
+    llm_fulltext_enable: bool = False  # 全文纠错模式
+    llm_fulltext_max_chars: int = 2000  # 全文最大字数
+    llm_batch_size: int = 5  # 批量润色句子数
+    llm_max_tokens: int = 4096  # LLM 上下文 token 限制
+
+    # 通用文本纠错配置 (pycorrector)
+    text_correct_enable: bool = False            # 通用文本纠错开关
+    text_correct_backend: str = "kenlm"          # kenlm | macbert
+    text_correct_device: str = "cpu"             # cpu | cuda (仅 macbert)
+
+    # 置信度过滤配置
+    confidence_threshold: float = 0.0            # 置信度阈值 (0=禁用)
+    confidence_fallback: str = "pycorrector"     # 低置信度回退策略: pycorrector | llm
 
     # 文本后处理配置
+    filler_remove_enable: bool = False         # 填充词移除 (如 "呃"、"那个"、"就是说")
+    filler_aggressive: bool = False            # 激进模式移除更多填充词
+    qj2bj_enable: bool = True                  # 全角字符归一化 (ＡＢＣＤ → ABCD)
     itn_enable: bool = True                    # 中文数字格式化 (如 "三百五十" → "350")
+    itn_erhua_remove: bool = False             # 儿化移除 (如 "那边儿" → "那边")
+    spacing_cjk_ascii_enable: bool = False     # 中英文间距 (如 "AI技术" → "AI 技术")
     zh_convert_enable: bool = False            # 繁简转换
     zh_convert_locale: str = "zh-hans"         # 目标区域: zh-hans/zh-hant/zh-tw/zh-hk
     punc_convert_enable: bool = False          # 标点转换 (全角→半角)
     punc_add_space: bool = True                # 标点后添加空格
+    punc_restore_enable: bool = False          # 独立标点恢复 (FunASR ct-punc)
+    punc_restore_model: str = "ct-punc-c"      # 标点恢复模型
+    punc_merge_enable: bool = False            # 标点智能合并
+
+    # 纠错管线编排 (按顺序执行)
+    # 可用步骤: hotword, rules, pycorrector, post_process
+    correction_pipeline: str = "hotword,rules,pycorrector,post_process"
 
     # WebSocket 配置
     ws_chunk_size: int = 9600  # 600ms @ 16kHz
     ws_chunk_interval: int = 10
+
+    # 音频预处理配置
+    audio_normalize_enable: bool = True          # 音量归一化
+    audio_normalize_target_db: float = -20.0     # 目标电平 (dB)
+    audio_trim_silence_enable: bool = False      # 静音裁剪
+    audio_silence_threshold_db: float = -40.0    # 静音阈值 (dB)
+    audio_denoise_enable: bool = False           # 降噪开关
+    audio_denoise_prop: float = 0.8              # 降噪强度 (0-1)
+    audio_denoise_backend: str = "noisereduce"   # 降噪后端: noisereduce | deepfilter
+    audio_vocal_separate_enable: bool = False    # 人声分离开关
+    audio_vocal_separate_model: str = "htdemucs" # 人声分离模型
+
+    # 流式文本去重配置
+    stream_dedup_enable: bool = True             # 启用流式去重
+    stream_dedup_overlap: int = 5                # 重叠检查字符数
+    stream_dedup_tolerance: int = 1              # 模糊匹配容差
 
     class Config:
         env_file = ".env"

@@ -17,11 +17,15 @@ librosa>=0.10.0
 soundfile>=0.12.1
 ffmpeg-python>=0.2.0
 numpy>=1.24.0
+noisereduce>=3.0.0
 
 # Hot word optimization (from CapsWriter)
 pypinyin>=0.50.0
 numba>=0.58.0
 jieba>=0.42.1
+
+# Text correction (optional)
+pycorrector>=1.0.0
 
 # LLM (optional)
 requests>=2.31.0
@@ -35,3 +39,17 @@ aiofiles>=23.2.0
 python-dotenv>=1.0.0
 loguru>=0.7.0
 rich>=13.7.0
+
+# Benchmark (optional)
+# pip install funasr-onnx  # ONNX 推理优化
+# pip install psutil       # 内存监控
+# pip install edge-tts     # TTS 生成测试音频
+
+# 深度学习音频增强 (可选)
+# pip install deepfilternet>=0.5  # DeepFilterNet 深度降噪
+# pip install demucs>=4.0         # 人声分离
+
+# ONNX 后端 (可选，提升 2-10x 推理速度)
+# pip install funasr-onnx>=0.1.0
+# pip install onnxruntime>=1.16.0        # CPU
+# pip install onnxruntime-gpu>=1.16.0    # GPU (需要 CUDA)

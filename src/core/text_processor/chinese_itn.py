@@ -21,6 +21,62 @@ import re
 
 
 # ============================================================
+# 儿化移除
+# ============================================================
+
+# 儿化白名单 - 这些词本身含"儿"，不应移除
+ERHUA_WHITELIST = {
+    '儿女', '儿子', '儿孙', '儿童', '儿歌', '女儿', '婴儿', '幼儿',
+    '胎儿', '孤儿', '孩儿', '健儿', '宠儿', '娇儿', '弃儿',
+    '儿时', '儿媳', '少儿', '育儿', '产儿', '儿科', '儿戏',
+    '小儿', '男儿', '儿郎', '生儿', '养儿', '侄儿',
+}
+
+# 儿化正则：匹配"X儿"模式（X为中文字符）
+_ERHUA_PATTERN = re.compile(r'([\u4e00-\u9fff])儿')
+
+
+def _erhua_replace(match):
+    """儿化替换回调"""
+    char_before = match.group(1)
+    word = char_before + '儿'
+    if word in ERHUA_WHITELIST:
+        return word
+    return char_before
+
+
+def remove_erhua(text: str) -> str:
+    """移除非词汇儿化
+
+    例如：
+    - 那边儿 → 那边
+    - 一点儿 → 一点
+    - 这儿那儿 → 这那
+    - 女儿 → 女儿 (白名单保留)
+    - 儿童 → 儿童 (不受影响，儿在词头)
+    """
+    if not text or '儿' not in text:
+        return text
+
+    # 先保护白名单中以"儿"开头的词
+    protected = {}
+    for word in sorted(ERHUA_WHITELIST, key=len, reverse=True):
+        if word in text and word.startswith('儿'):
+            placeholder = f'\x00{len(protected)}\x00'
+            text = text.replace(word, placeholder)
+            protected[placeholder] = word
+
+    # 替换儿化
+    text = _ERHUA_PATTERN.sub(_erhua_replace, text)
+
+    # 还原被保护的词
+    for placeholder, word in protected.items():
+        text = text.replace(placeholder, word)
+
+    return text
+
+
+# ============================================================
 # 第一部分：配置和映射表
 # ============================================================
 
@@ -492,6 +548,7 @@ class ChineseITN:
     - 比值: 三比一 → 3:1
     - 时间: 十四点三十分 → 14:30
     - 日期: 二零二五年一月 → 2025年1月
+    - 儿化移除: 那边儿 → 那边 (可选)
 
     用法:
         itn = ChineseITN()
@@ -499,8 +556,8 @@ class ChineseITN:
         # result: "今天是2025年1月30日"
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, erhua_remove: bool = False):
+        self.erhua_remove = erhua_remove
 
     def convert(self, text: str) -> str:
         """
@@ -514,6 +571,11 @@ class ChineseITN:
         """
         if not text:
             return text
+
+        # 儿化移除 (在 ITN 之前)
+        if self.erhua_remove:
+            text = remove_erhua(text)
+
         return _pattern.sub(_replace, text)
 
 

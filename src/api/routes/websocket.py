@@ -4,6 +4,7 @@ import uuid
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from src.config import settings
 from src.api.ws_manager import ws_manager, ConnectionState
 from src.core.engine import transcription_engine
 from src.models.model_manager import model_manager
@@ -11,6 +12,12 @@ from src.models.model_manager import model_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["websocket"])
+
+
+def _check_streaming_support() -> bool:
+    """检查当前后端是否支持流式转写"""
+    backend = model_manager.backend
+    return backend.supports_streaming
 
 
 @router.websocket("/ws/realtime")
@@ -22,12 +29,27 @@ async def websocket_realtime(websocket: WebSocket):
     1. 客户端发送配置 (JSON): {"is_speaking": true, "mode": "2pass"}
     2. 客户端发送音频 (binary): PCM 16bit, 16kHz, mono
     3. 服务端返回结果 (JSON): {"mode": "2pass-online", "text": "...", "is_final": false}
+
+    注意: 流式转写需要 PyTorch 后端支持。
+    如果配置了其他后端，将自动回退到 PyTorch。
     """
     await websocket.accept()
 
     connection_id = str(uuid.uuid4())
     ws_manager.connect(websocket, connection_id)
     state = ws_manager.get_state(connection_id)
+
+    # 检查流式支持，发送警告信息
+    if not _check_streaming_support():
+        backend_info = model_manager.backend.get_info()
+        logger.warning(
+            f"Backend {backend_info['name']} does not support streaming, "
+            "falling back to PyTorch backend for WebSocket"
+        )
+        await websocket.send_json({
+            "warning": f"当前后端 {backend_info['name']} 不支持流式，已自动切换到 PyTorch 后端",
+            "backend": backend_info['name'],
+        })
 
     frames = []
     frames_online = []
@@ -57,11 +79,16 @@ async def websocket_realtime(websocket: WebSocket):
                         audio_in = b"".join(frames_online)
                         result = await _asr_online(audio_in, state)
                         if result and result.get("text"):
-                            await websocket.send_json({
-                                "mode": "2pass-online" if state.mode == "2pass" else "online",
-                                "text": result["text"],
-                                "is_final": False,
-                            })
+                            text = result["text"]
+                            # 流式去重
+                            if settings.stream_dedup_enable:
+                                text = state.text_merger.merge(text)
+                            if text:  # 只发送非空增量
+                                await websocket.send_json({
+                                    "mode": "2pass-online" if state.mode == "2pass" else "online",
+                                    "text": text,
+                                    "is_final": False,
+                                })
                         frames_online = []
 
                 # 说话结束时执行离线识别
@@ -75,6 +102,10 @@ async def websocket_realtime(websocket: WebSocket):
                             if transcription_engine._hotwords_loaded:
                                 correction = transcription_engine.corrector.correct(text)
                                 text = correction.text
+
+                            # 流式去重 (最终文本)
+                            if settings.stream_dedup_enable:
+                                text = state.text_merger.merge_final(text)
 
                             await websocket.send_json({
                                 "mode": "2pass-offline" if state.mode == "2pass" else "offline",
@@ -108,8 +139,12 @@ def _handle_config(state: ConnectionState, config: dict):
 
 
 async def _asr_online(audio_in: bytes, state: ConnectionState) -> dict:
-    """在线流式识别"""
+    """在线流式识别
+
+    注意: 始终使用 PyTorch 后端的流式功能。
+    """
     try:
+        # 使用 PyTorch 后端的流式模型
         online_model = model_manager.loader.asr_model_online
         result = online_model.generate(
             input=audio_in,
@@ -126,15 +161,31 @@ async def _asr_online(audio_in: bytes, state: ConnectionState) -> dict:
 
 
 async def _asr_offline(audio_in: bytes, state: ConnectionState) -> dict:
-    """离线识别"""
+    """离线识别
+
+    使用配置的后端进行离线识别。
+    """
     try:
-        offline_model = model_manager.loader.asr_model
-        result = offline_model.generate(
-            input=audio_in,
-            hotword=state.hotwords,
-        )
-        if result:
-            return {"text": result[0].get("text", "")}
+        backend = model_manager.backend
+
+        # 如果后端支持，使用后端转写
+        if backend.supports_streaming or backend.get_info()["type"] == "pytorch":
+            # PyTorch 后端使用 loader
+            offline_model = model_manager.loader.asr_model
+            result = offline_model.generate(
+                input=audio_in,
+                hotword=state.hotwords,
+            )
+            if result:
+                return {"text": result[0].get("text", "")}
+        else:
+            # 其他后端使用 backend.transcribe
+            result = backend.transcribe(
+                audio_in,
+                hotwords=state.hotwords,
+            )
+            if result:
+                return {"text": result.get("text", "")}
     except Exception as e:
         logger.error(f"Offline ASR error: {e}")
     return {}

@@ -4,6 +4,9 @@ from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 from fastapi import WebSocket
 
+from src.config import settings
+from src.core.text_processor.stream_merger import StreamTextMerger
+
 logger = logging.getLogger(__name__)
 
 
@@ -16,12 +19,17 @@ class ConnectionState:
     chunk_interval: int = 10
     mode: str = "2pass"
     hotwords: Optional[str] = None
+    text_merger: StreamTextMerger = field(default_factory=lambda: StreamTextMerger(
+        overlap_chars=settings.stream_dedup_overlap,
+        error_tolerance=settings.stream_dedup_tolerance,
+    ))
 
     def reset(self):
         """重置状态"""
         self.is_speaking = False
         self.asr_cache = {}
         self.vad_cache = {}
+        self.text_merger.reset()
 
 
 class WebSocketManager:

@@ -43,19 +43,22 @@ class PhonemeCorrector:
     - 模糊音权重提高相似音匹配精度
     """
 
-    def __init__(self, threshold: float = 0.8, similar_threshold: float = None):
+    def __init__(self, threshold: float = 0.8, similar_threshold: float = None, cache_size: int = 1000):
         """
         初始化纠错器
 
         Args:
             threshold: 替换阈值 (高于此分数才替换)
             similar_threshold: 相似度阈值 (高于此分数加入相似列表)
+            cache_size: 缓存大小 (最大缓存条目数)
         """
         self.threshold = threshold
         self.similar_threshold = similar_threshold if similar_threshold is not None else (threshold - 0.2)
         self.hotwords: Dict[str, List[Phoneme]] = {}
         self.fast_rag = FastRAG(threshold=min(self.threshold, self.similar_threshold) - 0.1)
         self._lock = threading.Lock()
+        self._cache: Dict[str, CorrectionResult] = {}
+        self._cache_size = cache_size
 
     def update_hotwords(self, text: str) -> int:
         """从文本更新热词"""
@@ -72,6 +75,7 @@ class PhonemeCorrector:
             self.hotwords = new_hotwords
             self.fast_rag = FastRAG(threshold=min(self.threshold, self.similar_threshold) - 0.1)
             self.fast_rag.add_hotwords(new_hotwords)
+            self._cache.clear()  # 热词变化时清空缓存
 
         return len(new_hotwords)
 
@@ -96,6 +100,10 @@ class PhonemeCorrector:
         if not text or not self.hotwords:
             return CorrectionResult(text or "", [], [])
 
+        # 缓存检查
+        if text in self._cache:
+            return self._cache[text]
+
         input_phs = get_phoneme_info(text)
         if not input_phs:
             return CorrectionResult(text, [], [])
@@ -111,11 +119,17 @@ class PhonemeCorrector:
         # 阶段3: 冲突解决与替换
         new_text, final_matches = self._resolve_and_replace(text, matches)
 
-        return CorrectionResult(
+        result = CorrectionResult(
             new_text,
             final_matches,
             similars[:top_k]
         )
+
+        # 写入缓存
+        if len(self._cache) < self._cache_size:
+            self._cache[text] = result
+
+        return result
 
     def _find_matches(
         self,

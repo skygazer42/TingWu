@@ -1,0 +1,58 @@
+# ONNX 优化后端 Dockerfile
+# 使用 ONNX Runtime 进行高性能 CPU 推理
+
+FROM python:3.10-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+# 安装基础依赖
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# 安装 ONNX 相关依赖
+RUN pip install --no-cache-dir --prefix=/install \
+    funasr-onnx>=0.1.0 \
+    onnxruntime>=1.16.0
+
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # ONNX Runtime 优化
+    OMP_NUM_THREADS=8 \
+    MKL_NUM_THREADS=8 \
+    # 默认使用 ONNX 后端
+    ASR_BACKEND=onnx \
+    DEVICE=cpu
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    # ONNX Runtime 可能需要的库
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
+
+COPY src/ ./src/
+COPY configs/ ./configs/
+COPY data/hotwords/ ./data/hotwords/
+
+RUN mkdir -p data/models data/uploads data/outputs
+
+EXPOSE 8000
+
+# ONNX 模型首次加载可能较慢
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

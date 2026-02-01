@@ -1,0 +1,54 @@
+version: '3.8'
+
+# SenseVoice 后端部署配置
+# 使用 SenseVoice 进行超高速推理
+# 10秒音频仅需 70ms，比 Whisper-Large 快 15 倍
+
+services:
+  tingwu-sensevoice:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tingwu-speech-service:sensevoice
+    container_name: tingwu-service-sensevoice
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - model-cache:/root/.cache/modelscope
+      - huggingface-cache:/root/.cache/huggingface
+    environment:
+      # 后端配置
+      - ASR_BACKEND=sensevoice
+      - SENSEVOICE_MODEL=${SENSEVOICE_MODEL:-iic/SenseVoiceSmall}
+      - SENSEVOICE_LANGUAGE=${SENSEVOICE_LANGUAGE:-zh}
+      # 设备配置
+      - DEVICE=${DEVICE:-cuda}
+      - NGPU=${NGPU:-1}
+      - NCPU=${NCPU:-4}
+      # 通用配置
+      - DEBUG=${DEBUG:-false}
+      - HOTWORDS_THRESHOLD=${HOTWORDS_THRESHOLD:-0.85}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  model-cache:
+  huggingface-cache:
