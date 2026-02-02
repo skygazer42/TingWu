@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     outputs_dir: Path = data_dir / "outputs"
 
     # ASR 后端配置
-    asr_backend: Literal["pytorch", "onnx", "sensevoice", "gguf"] = "pytorch"
+    asr_backend: Literal["pytorch", "onnx", "sensevoice", "gguf", "qwen3", "vibevoice", "router"] = "pytorch"
 
     # FunASR 模型配置 (PyTorch 后端)
     asr_model: str = "paraformer-zh"
@@ -53,6 +53,26 @@ class Settings(BaseSettings):
     gguf_decoder_path: str = "models/Fun-ASR-Nano-Decoder.q8_0.gguf"
     gguf_tokens_path: str = "models/tokens.txt"
     gguf_lib_dir: str = "models/bin"  # llama.cpp 库目录
+
+    # Remote ASR 后端配置（vLLM OpenAI-compatible server）
+    # Qwen3-ASR: /v1/audio/transcriptions
+    qwen3_asr_base_url: str = "http://localhost:9001"
+    qwen3_asr_model: str = "Qwen/Qwen3-ASR-1.7B"
+    qwen3_asr_api_key: str = "EMPTY"
+    qwen3_asr_timeout_s: float = 60.0
+
+    # VibeVoice-ASR: /v1/audio/transcriptions (preferred), optional /v1/chat/completions fallback
+    vibevoice_asr_base_url: str = "http://localhost:9002"
+    vibevoice_asr_model: str = "vibevoice"
+    vibevoice_asr_api_key: str = "EMPTY"
+    vibevoice_asr_timeout_s: float = 600.0
+    vibevoice_asr_use_chat_completions_fallback: bool = False
+
+    # Router 后端：根据音频时长/是否需要说话人自动选择后端
+    router_long_audio_threshold_s: float = 60.0
+    router_force_vibevoice_when_with_speaker: bool = True
+    router_short_backend: Literal["qwen3", "vibevoice"] = "qwen3"
+    router_long_backend: Literal["qwen3", "vibevoice"] = "vibevoice"
 
     # 设备配置
     device: Literal["cuda", "cpu"] = "cuda"
