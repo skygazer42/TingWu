@@ -79,6 +79,10 @@ def get_backend(
             ) from e
         return GGUFBackend(**kwargs)
 
+    elif backend_type == "qwen3":
+        from .qwen3_remote import Qwen3RemoteBackend
+        return Qwen3RemoteBackend(**kwargs)
+
     else:
         raise ValueError(f"不支持的后端类型: {backend_type}")
 
