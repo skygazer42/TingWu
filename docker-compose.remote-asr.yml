@@ -1,0 +1,109 @@
+version: "3.8"
+
+services:
+  # Qwen3-ASR (OpenAI-compatible /v1/chat/completions)
+  qwen3-asr:
+    image: qwenllm/qwen3-asr:latest
+    container_name: qwen3-asr
+    ports:
+      - "9001:8000"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - ./docker/remote-asr/start_qwen3_asr.sh:/start_qwen3_asr.sh:ro
+    command: ["bash", "-lc", "sed -i 's/\\r$//' /start_qwen3_asr.sh && bash /start_qwen3_asr.sh"]
+    shm_size: "4gb"
+    environment:
+      - QWEN3_MODEL_ID=${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-0.6B}
+      - PORT=8000
+      - GPU_MEMORY_UTILIZATION=${QWEN3_GPU_MEMORY_UTILIZATION:-0.85}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # VibeVoice-ASR (OpenAI-compatible /v1/chat/completions)
+  # NOTE: the official server defaults (64k context) usually need >=24GB VRAM.
+  # This compose file uses smaller defaults so it can start on ~16GB VRAM GPUs for smoke tests.
+  vibevoice-asr:
+    image: vllm/vllm-openai:latest
+    container_name: vibevoice-asr
+    ports:
+      - "9002:8000"
+    volumes:
+      # Mount local VibeVoice repo (contains vllm_plugin + python package)
+      - F:/pythonproject/VibeVoice:/app
+      - huggingface-cache:/root/.cache/huggingface
+      - ./docker/remote-asr/start_vibevoice_asr.sh:/start_vibevoice_asr.sh:ro
+    entrypoint: ["bash", "-lc"]
+    command: ["sed -i 's/\\r$//' /start_vibevoice_asr.sh && bash /start_vibevoice_asr.sh"]
+    shm_size: "4gb"
+    environment:
+      - VIBEVOICE_MODEL_ID=${VIBEVOICE_MODEL_ID:-microsoft/VibeVoice-ASR}
+      - PORT=8000
+      - SERVED_MODEL_NAME=${VIBEVOICE_SERVED_MODEL_NAME:-vibevoice}
+      - DTYPE=${VIBEVOICE_DTYPE:-float16}
+      - MAX_MODEL_LEN=${VIBEVOICE_MAX_MODEL_LEN:-16384}
+      - MAX_NUM_SEQS=${VIBEVOICE_MAX_NUM_SEQS:-2}
+      - MAX_NUM_BATCHED_TOKENS=${VIBEVOICE_MAX_NUM_BATCHED_TOKENS:-4096}
+      - GPU_MEMORY_UTILIZATION=${VIBEVOICE_GPU_MEMORY_UTILIZATION:-0.90}
+      - VIBEVOICE_FFMPEG_MAX_CONCURRENCY=${VIBEVOICE_FFMPEG_MAX_CONCURRENCY:-16}
+      - PYTORCH_ALLOC_CONF=expandable_segments:True
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # TingWu service configured to route to the two remote ASR servers above.
+  tingwu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tingwu-speech-service:latest
+    container_name: tingwu-service
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - model-cache:/root/.cache/modelscope
+      - huggingface-cache:/root/.cache/huggingface
+    environment:
+      - DEVICE=${DEVICE:-cuda}
+      - NGPU=${NGPU:-1}
+      - NCPU=${NCPU:-4}
+      - DEBUG=${DEBUG:-false}
+      - HOTWORDS_THRESHOLD=${HOTWORDS_THRESHOLD:-0.85}
+
+      # Remote ASR backend wiring
+      - ASR_BACKEND=${ASR_BACKEND:-router}
+      - QWEN3_ASR_BASE_URL=http://qwen3-asr:8000
+      - QWEN3_ASR_MODEL=${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-0.6B}
+      - VIBEVOICE_ASR_BASE_URL=http://vibevoice-asr:8000
+      - VIBEVOICE_ASR_MODEL=${VIBEVOICE_SERVED_MODEL_NAME:-vibevoice}
+      - VIBEVOICE_ASR_USE_CHAT_COMPLETIONS_FALLBACK=true
+      - ROUTER_SHORT_BACKEND=qwen3
+      - ROUTER_LONG_BACKEND=vibevoice
+      - ROUTER_LONG_AUDIO_THRESHOLD_S=${ROUTER_LONG_AUDIO_THRESHOLD_S:-60}
+      - ROUTER_FORCE_VIBEVOICE_WHEN_WITH_SPEAKER=${ROUTER_FORCE_VIBEVOICE_WHEN_WITH_SPEAKER:-true}
+    depends_on:
+      - qwen3-asr
+      - vibevoice-asr
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  model-cache:
+  huggingface-cache:
