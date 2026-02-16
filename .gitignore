@@ -21,6 +21,12 @@ ENV/
 *.swp
 *.swo
 
+# Worktrees / agent tooling
+.worktrees/
+.agents/
+.codex/
+.claude/
+
 # Data
 data/uploads/*
 data/outputs/*
