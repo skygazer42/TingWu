@@ -100,8 +100,10 @@ docker compose -f docker-compose.models.yml down
 - `chunking`：长音频分块参数（chunk 时长/重叠/合并 overlap_chars/线程数）
 - `backend`：模型后端参数（不同后端支持的参数不同）
 - `postprocess`：文本后处理（ITN/标点/spacing 等）
+- `speaker`：会议/回忆转录输出格式（说话人标签风格、turn 合并阈值等；需 `with_speaker=true`）
 
 返回中会额外包含一个可选字段 `text_accu`：基于时间窗口对齐的“精确拼接文本”（长音频 chunk overlap 去重更严格），更适合回忆/会议转录的最终稿输出。
+当 `with_speaker=true` 时，返回会额外包含 `speaker_turns`（按说话人合并后的段落/turn 列表），并且 `transcript` 默认会优先使用 `speaker_turns` 来格式化（更适合会议阅读/回放）。
 
 示例：强制更小的 chunk + 更激进的合并窗口（更偏准确率，慢一点）
 
@@ -147,6 +149,20 @@ curl -X POST "http://localhost:8101/api/v1/transcribe" \
   -F "file=@/path/to/audio.wav" \
   -F 'asr_options={"preprocess":{"adaptive_enable":true,"snr_threshold":20,"denoise_enable":true}}'
 ```
+
+示例：会议/回忆转录（说话人 + turn 合并 + 数字标签）
+
+```bash
+curl -X POST "http://localhost:8200/api/v1/transcribe" \
+  -F "file=@/path/to/meeting.wav" \
+  -F "with_speaker=true" \
+  -F 'asr_options={"speaker":{"label_style":"numeric","turn_merge_enable":true,"turn_merge_gap_ms":800}}'
+```
+
+说明：
+- `speaker_turns`：合并后的 turn 列表（更适合人类阅读/导出）
+- `sentences`：句级时间戳（更适合时间轴/字幕等）
+- 如果后端不支持说话人识别且 `SPEAKER_STRICT_BACKEND=true`（默认），会直接返回 400（推荐用 `vibevoice` 或 `router` 后端做说话人）
 
 #### 模型缓存
 
