@@ -5,9 +5,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { Copy, Check, AlignLeft, List } from 'lucide-react'
+import { Copy, Check, AlignLeft, List, Users } from 'lucide-react'
 import { SentenceList } from './SentenceList'
 import { SpeakerStats } from './SpeakerStats'
+import { SpeakerBadge } from './SpeakerBadge'
 import { ExportMenu } from './ExportMenu'
 import { useTranscriptionStore } from '@/stores'
 import type { TranscribeResponse, SentenceInfo } from '@/lib/api/types'
@@ -23,6 +24,7 @@ export function TranscriptView({ result, filename }: TranscriptViewProps) {
   const { setSelectedSentence } = useTranscriptionStore()
 
   const hasSpeakers = result.sentences.some(s => s.speaker_id !== undefined)
+  const hasTurns = (result.speaker_turns?.length ?? 0) > 0
   const hasRawText = !!result.raw_text && result.raw_text !== result.text
 
   const handleCopy = async () => {
@@ -84,6 +86,12 @@ export function TranscriptView({ result, filename }: TranscriptViewProps) {
                   <List className="h-4 w-4" />
                   分句视图
                 </TabsTrigger>
+                {hasTurns && (
+                  <TabsTrigger value="turns" className="gap-2">
+                    <Users className="h-4 w-4" />
+                    说话人段落
+                  </TabsTrigger>
+                )}
                 <TabsTrigger value="full" className="gap-2">
                   <AlignLeft className="h-4 w-4" />
                   全文视图
@@ -101,6 +109,28 @@ export function TranscriptView({ result, filename }: TranscriptViewProps) {
                   />
                 </ScrollArea>
               </TabsContent>
+
+              {hasTurns && (
+                <TabsContent value="turns">
+                  <ScrollArea className="h-[400px] pr-4">
+                    <div className="space-y-3">
+                      {(result.speaker_turns || []).map((t, idx) => (
+                        <div key={idx} className="rounded-md border p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <SpeakerBadge speaker={t.speaker} speakerId={t.speaker_id} />
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                              {formatDuration(t.start)} - {formatDuration(t.end)}
+                            </span>
+                          </div>
+                          <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">
+                            {t.text}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+              )}
 
               <TabsContent value="full">
                 <ScrollArea className="h-[400px]">

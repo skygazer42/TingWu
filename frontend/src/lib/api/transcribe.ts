@@ -44,6 +44,17 @@ export async function transcribeAudio(
     formData.append('hotwords', transcribeOptions.hotwords)
   }
 
+  // Per-request ASR tuning (backend supports allowlisted options).
+  const asrOptions: Record<string, unknown> = {}
+  if (transcribeOptions.with_speaker) {
+    asrOptions.speaker = {
+      label_style: transcribeOptions.speaker_label_style || 'numeric',
+    }
+  }
+  if (Object.keys(asrOptions).length > 0) {
+    formData.append('asr_options', JSON.stringify(asrOptions))
+  }
+
   const response = await apiClient.post<TranscribeResponse>(
     '/api/v1/transcribe',
     formData,
@@ -95,6 +106,16 @@ export async function transcribeBatch(
   }
   if (transcribeOptions.max_concurrent !== undefined) {
     formData.append('max_concurrent', String(transcribeOptions.max_concurrent))
+  }
+
+  const asrOptions: Record<string, unknown> = {}
+  if (transcribeOptions.with_speaker) {
+    asrOptions.speaker = {
+      label_style: transcribeOptions.speaker_label_style || 'numeric',
+    }
+  }
+  if (Object.keys(asrOptions).length > 0) {
+    formData.append('asr_options', JSON.stringify(asrOptions))
   }
 
   const totalSize = files.reduce((acc, f) => acc + f.size, 0)
@@ -184,6 +205,16 @@ export async function transcribeVideo(
   }
   if (transcribeOptions.hotwords) {
     formData.append('hotwords', transcribeOptions.hotwords)
+  }
+
+  const asrOptions: Record<string, unknown> = {}
+  if (transcribeOptions.with_speaker) {
+    asrOptions.speaker = {
+      label_style: transcribeOptions.speaker_label_style || 'numeric',
+    }
+  }
+  if (Object.keys(asrOptions).length > 0) {
+    formData.append('asr_options', JSON.stringify(asrOptions))
   }
 
   const response = await apiClient.post<VideoTranscribeResponse>(

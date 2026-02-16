@@ -1,14 +1,30 @@
 import axios, { type AxiosInstance, type AxiosError } from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+function normalizeBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim()
+  if (!trimmed) return ''
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed
+}
+
+const DEFAULT_API_BASE_URL = normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL || '')
+let currentApiBaseUrl = DEFAULT_API_BASE_URL
 
 export const apiClient: AxiosInstance = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: currentApiBaseUrl,
   timeout: 120000, // 2 分钟超时（转写可能需要较长时间）
   headers: {
     'Content-Type': 'application/json',
   },
 })
+
+export function getApiBaseUrl(): string {
+  return currentApiBaseUrl
+}
+
+export function setApiBaseUrl(baseUrl: string): void {
+  currentApiBaseUrl = normalizeBaseUrl(baseUrl)
+  apiClient.defaults.baseURL = currentApiBaseUrl
+}
 
 // 请求拦截器
 apiClient.interceptors.request.use(

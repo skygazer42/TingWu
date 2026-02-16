@@ -8,10 +8,21 @@ export interface SentenceInfo {
   speaker_id?: number
 }
 
+export interface SpeakerTurn {
+  speaker: string
+  speaker_id: number
+  start: number  // 毫秒
+  end: number    // 毫秒
+  text: string
+  sentence_count: number
+}
+
 export interface TranscribeResponse {
   code: number
   text: string
+  text_accu?: string | null
   sentences: SentenceInfo[]
+  speaker_turns?: SpeakerTurn[] | null
   transcript?: string
   raw_text?: string
 }
@@ -85,6 +96,19 @@ export interface MetricsResponse {
   llm_cache_stats: Record<string, unknown>
 }
 
+export interface BackendCapabilities {
+  supports_speaker: boolean
+  supports_streaming: boolean
+  supports_hotwords: boolean
+}
+
+export interface BackendInfoResponse {
+  backend: string
+  info: Record<string, unknown>
+  capabilities: BackendCapabilities
+  speaker_unsupported_behavior: 'error' | 'fallback' | 'ignore'
+}
+
 // 热词相关
 export interface HotwordsListResponse {
   code: number
@@ -123,6 +147,7 @@ export interface TranscribeOptions {
   apply_llm?: boolean
   llm_role?: 'default' | 'translator' | 'code' | 'corrector'
   hotwords?: string
+  speaker_label_style?: 'numeric' | 'zh'
 }
 
 // WebSocket 消息类型
