@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 __all__ = ["parse_asr_options"]
 
 
-_TOP_LEVEL_KEYS = {"preprocess", "chunking", "backend", "postprocess", "debug"}
+_TOP_LEVEL_KEYS = {"preprocess", "chunking", "backend", "postprocess", "speaker", "debug"}
 
 _PREPROCESS_KEYS = {
     "normalize_enable",
@@ -71,6 +71,13 @@ _POSTPROCESS_KEYS = {
     "punc_merge_enable",
     "trash_punc_enable",
     "trash_punc_chars",
+}
+
+_SPEAKER_KEYS = {
+    "label_style",
+    "turn_merge_enable",
+    "turn_merge_gap_ms",
+    "turn_merge_min_chars",
 }
 
 _PREPROCESS_TYPES: Dict[str, str] = {
@@ -129,6 +136,13 @@ _POSTPROCESS_TYPES: Dict[str, str] = {
     "trash_punc_chars": "str",
 }
 
+_SPEAKER_TYPES: Dict[str, str] = {
+    "label_style": "str",
+    "turn_merge_enable": "bool",
+    "turn_merge_gap_ms": "int",
+    "turn_merge_min_chars": "int",
+}
+
 
 def parse_asr_options(asr_options_str: Optional[str]) -> Optional[Dict[str, Any]]:
     """Parse and validate `asr_options`.
@@ -168,9 +182,11 @@ def parse_asr_options(asr_options_str: Optional[str]) -> Optional[Dict[str, Any]
     _validate_section(obj, "preprocess", allowed_keys=_PREPROCESS_KEYS)
     _validate_section(obj, "chunking", allowed_keys=_CHUNKING_KEYS)
     _validate_section(obj, "postprocess", allowed_keys=_POSTPROCESS_KEYS)
+    _validate_section(obj, "speaker", allowed_keys=_SPEAKER_KEYS)
     _validate_section_types(obj, "preprocess", type_map=_PREPROCESS_TYPES)
     _validate_section_types(obj, "chunking", type_map=_CHUNKING_TYPES)
     _validate_section_types(obj, "postprocess", type_map=_POSTPROCESS_TYPES)
+    _validate_section_types(obj, "speaker", type_map=_SPEAKER_TYPES)
 
     chunking = obj.get("chunking") or {}
     if isinstance(chunking, dict) and "strategy" in chunking:
@@ -210,6 +226,17 @@ def parse_asr_options(asr_options_str: Optional[str]) -> Optional[Dict[str, Any]
 
     # Numeric sanity checks (best-effort; deeper validation happens in engine).
     _validate_ranges(obj)
+
+    speaker = obj.get("speaker") or {}
+    if isinstance(speaker, dict) and "label_style" in speaker:
+        style = speaker.get("label_style")
+        if isinstance(style, str):
+            normalized = style.strip().lower()
+        else:
+            normalized = None
+        if normalized not in ("zh", "numeric"):
+            raise ValueError("asr_options.speaker.label_style must be one of: zh, numeric")
+        speaker["label_style"] = normalized
 
     return obj
 
@@ -312,3 +339,14 @@ def _validate_ranges(obj: Dict[str, Any]) -> None:
             oc = chunking.get("overlap_chars")
             if isinstance(oc, int) and oc < 0:
                 raise ValueError("asr_options.chunking.overlap_chars must be >= 0")
+
+    speaker = obj.get("speaker") or {}
+    if isinstance(speaker, dict):
+        if "turn_merge_gap_ms" in speaker:
+            gap = speaker.get("turn_merge_gap_ms")
+            if isinstance(gap, int) and gap < 0:
+                raise ValueError("asr_options.speaker.turn_merge_gap_ms must be >= 0")
+        if "turn_merge_min_chars" in speaker:
+            mc = speaker.get("turn_merge_min_chars")
+            if isinstance(mc, int) and mc < 0:
+                raise ValueError("asr_options.speaker.turn_merge_min_chars must be >= 0")

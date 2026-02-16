@@ -46,3 +46,16 @@ def test_asr_options_postprocess_spoken_punc_and_acronym_keys_allowed():
     assert opts is not None
     assert opts["postprocess"]["spoken_punc_enable"] is True
     assert opts["postprocess"]["acronym_merge_enable"] is True
+
+
+def test_asr_options_speaker_keys_allowed():
+    opts = parse_asr_options('{"speaker":{"label_style":"numeric","turn_merge_enable":true,"turn_merge_gap_ms":800}}')
+    assert opts is not None
+    assert opts["speaker"]["label_style"] == "numeric"
+    assert opts["speaker"]["turn_merge_enable"] is True
+    assert opts["speaker"]["turn_merge_gap_ms"] == 800
+
+
+def test_asr_options_speaker_rejects_unknown_keys():
+    with pytest.raises(ValueError, match="asr_options\\.speaker"):
+        parse_asr_options('{"speaker":{"wat":1}}')
