@@ -93,6 +93,9 @@ VIBEVOICE_REPO_PATH=/path/to/VibeVoice \
 docker compose -f docker-compose.models.yml down
 ```
 
+提示：
+- 打开任意一个 TingWu 容器的前端页面后，可在「转写选项 → 后端」里切换 `Base URL`（例如 `http://localhost:8101` / `8102` / `8201`），前端会把请求发到你选择的端口。
+
 #### 请求级调参（`asr_options`，用于准确率 A/B）
 
 在 `POST /api/v1/transcribe`（以及 batch）里可以额外传一个表单字段 `asr_options`（JSON 字符串），用于**单次请求**调参：
@@ -162,7 +165,9 @@ curl -X POST "http://localhost:8200/api/v1/transcribe" \
 说明：
 - `speaker_turns`：合并后的 turn 列表（更适合人类阅读/导出）
 - `sentences`：句级时间戳（更适合时间轴/字幕等）
-- 如果后端不支持说话人识别且 `SPEAKER_STRICT_BACKEND=true`（默认），会直接返回 400（推荐用 `vibevoice` 或 `router` 后端做说话人）
+- 如果后端不支持说话人识别，行为由 `SPEAKER_UNSUPPORTED_BEHAVIOR` 控制：`error | fallback | ignore`
+  - 多端口/多模型场景推荐 `ignore`（`docker-compose.models.yml` 默认已设置为 ignore）
+  - 单容器部署如果希望“说话人自动回退到 PyTorch”，可用 `fallback`
 - 一键脚本：`scripts/transcribe_meeting.sh /path/to/meeting.wav http://localhost:8200`
 
 #### 模型缓存
