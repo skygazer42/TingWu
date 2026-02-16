@@ -66,3 +66,38 @@ def test_audio_chunker_time_strategy_splits_by_duration_without_silence():
     # Time strategy should split around target_end (10s), and the next chunk starts at (10s - overlap).
     assert chunks[0][1] == 0
     assert chunks[1][1] == _sec_to_samples(8.0, sr)
+
+
+def test_audio_chunker_prefers_longer_silence_over_later_shorter_silence():
+    sr = 16000
+
+    speech = lambda s: np.full((_sec_to_samples(s, sr),), 0.1, dtype=np.float32)
+    silence = lambda s: np.zeros((_sec_to_samples(s, sr),), dtype=np.float32)
+
+    # Two silence regions exist within the search range near the target end (10s):
+    # - a longer silence earlier (should be chosen)
+    # - a shorter silence later (should not be chosen)
+    audio = np.concatenate(
+        [
+            speech(8.0),
+            silence(1.2),   # long silence, midpoint ~8.6s (prefer)
+            speech(0.4),
+            silence(0.4),   # short silence, midpoint ~9.8s
+            speech(2.0),
+        ]
+    )
+
+    chunker = AudioChunker(
+        max_chunk_duration=10.0,
+        min_chunk_duration=5.0,
+        overlap_duration=0.5,
+        silence_threshold_db=-40.0,
+        min_silence_duration=0.3,
+    )
+
+    chunks = chunker.split(audio, sample_rate=sr)
+    assert len(chunks) >= 2
+
+    # If the long silence midpoint (~8.6s) is chosen as split, next chunk starts at ~8.1s.
+    second_start = chunks[1][1]
+    assert second_start < _sec_to_samples(9.0, sr)

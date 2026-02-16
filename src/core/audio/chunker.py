@@ -95,19 +95,16 @@ class AudioChunker:
 
         return chunks
 
-    def _find_silence_points(
+    def _find_silence_candidates(
         self,
         audio: np.ndarray,
         sample_rate: int = 16000,
-    ) -> List[int]:
-        """查找静音分割点
+    ) -> List[Tuple[int, int]]:
+        """查找静音候选点 (mid_sample, silence_length_frames).
 
-        Args:
-            audio: 音频数据
-            sample_rate: 采样率
-
-        Returns:
-            静音点位置列表 (样本索引)
+        Note:
+            We keep a richer representation than `_find_silence_points` so the splitter
+            can score candidates (prefer longer continuous silence, then closer to target end).
         """
         # 帧参数
         frame_length = int(sample_rate * 0.025)  # 25ms
@@ -129,8 +126,7 @@ class AudioChunker:
         # 找到静音区域
         is_silence = frame_energies < self.silence_threshold
 
-        # 找到连续静音区域的中点
-        silence_points = []
+        candidates: List[Tuple[int, int]] = []
         silence_start = None
 
         for i, silent in enumerate(is_silence):
@@ -141,13 +137,29 @@ class AudioChunker:
                 if silence_start is not None:
                     silence_length = i - silence_start
                     if silence_length >= min_silence_frames:
-                        # 取静音区域的中点作为分割点
                         mid_frame = silence_start + silence_length // 2
                         mid_sample = mid_frame * hop_length
-                        silence_points.append(mid_sample)
+                        candidates.append((mid_sample, silence_length))
                     silence_start = None
 
-        return silence_points
+        return candidates
+
+    def _find_silence_points(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+    ) -> List[int]:
+        """查找静音分割点
+
+        Args:
+            audio: 音频数据
+            sample_rate: 采样率
+
+        Returns:
+            静音点位置列表 (样本索引)
+        """
+        candidates = self._find_silence_candidates(audio, sample_rate=sample_rate)
+        return [mid_sample for mid_sample, _silence_length in candidates]
 
     def split(
         self,
@@ -175,8 +187,8 @@ class AudioChunker:
             logger.info(f"Split audio ({duration:.1f}s) into {len(chunks)} chunks (strategy=time)")
             return chunks
 
-        # 找到所有静音分割点
-        silence_points = self._find_silence_points(audio, sample_rate)
+        # 找到所有静音候选点 (mid_sample, silence_length_frames)
+        silence_candidates = self._find_silence_candidates(audio, sample_rate)
 
         # 计算分块边界
         max_samples = int(self.max_chunk_duration * sample_rate)
@@ -199,14 +211,20 @@ class AudioChunker:
             best_split = target_end
             search_start = max(current_start + min_samples, target_end - max_samples // 4)
 
-            # Select the latest (closest-to-target_end) silence point within the search range.
-            # This reduces unnecessary early splits and lowers boundary cut risk.
-            for point in silence_points:
-                if point < search_start:
+            # Score candidates within the search range:
+            # - Prefer longer continuous silence (lower mid-word cut risk)
+            # - Then prefer candidates closer to target_end (fewer boundaries overall)
+            best_key = None
+            for mid_sample, silence_length_frames in silence_candidates:
+                if mid_sample < search_start:
                     continue
-                if point > target_end:
+                if mid_sample > target_end:
                     break
-                best_split = point
+
+                key = (silence_length_frames, mid_sample)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_split = mid_sample
 
             # 添加分块 (包含重叠)
             chunk_end = min(best_split + overlap_samples, len(audio))
