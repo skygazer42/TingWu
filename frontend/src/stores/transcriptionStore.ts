@@ -10,6 +10,12 @@ interface TranscriptionState {
   options: TranscribeOptions
   setOptions: (options: Partial<TranscribeOptions>) => void
 
+  // 高级 asr_options（JSON 文本，直接透传到后端的 allowlist 解析）
+  advancedAsrOptionsText: string
+  setAdvancedAsrOptionsText: (text: string) => void
+  advancedAsrOptionsError: string | null
+  setAdvancedAsrOptionsError: (error: string | null) => void
+
   // 临时热词
   tempHotwords: string
   setTempHotwords: (hotwords: string) => void
@@ -51,6 +57,12 @@ export const useTranscriptionStore = create<TranscriptionState>((set) => ({
   setOptions: (options) =>
     set((state) => ({ options: { ...state.options, ...options } })),
 
+  // 高级 asr_options
+  advancedAsrOptionsText: '',
+  setAdvancedAsrOptionsText: (advancedAsrOptionsText) => set({ advancedAsrOptionsText }),
+  advancedAsrOptionsError: null,
+  setAdvancedAsrOptionsError: (advancedAsrOptionsError) => set({ advancedAsrOptionsError }),
+
   // 临时热词
   tempHotwords: '',
   setTempHotwords: (tempHotwords) => set({ tempHotwords }),
@@ -81,5 +93,7 @@ export const useTranscriptionStore = create<TranscriptionState>((set) => ({
       isTranscribing: false,
       selectedSentence: null,
       tempHotwords: '',
+      advancedAsrOptionsText: '',
+      advancedAsrOptionsError: null,
     }),
 }))
