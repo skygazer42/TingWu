@@ -48,6 +48,11 @@ class AudioPreprocessor:
         adaptive_enable: bool = False,
         snr_threshold: float = 20.0,
         remove_dc_offset: bool = True,
+        highpass_enable: bool = False,
+        highpass_cutoff_hz: float = 80.0,
+        soft_limit_enable: bool = False,
+        soft_limit_target: float = 0.98,
+        soft_limit_knee: float = 2.0,
     ):
         """
         初始化预处理器
@@ -67,6 +72,11 @@ class AudioPreprocessor:
             adaptive_enable: 是否启用自适应预处理
             snr_threshold: SNR 阈值 (低于此值启用降噪)
             remove_dc_offset: 是否移除 DC offset (均值偏移)
+            highpass_enable: 是否启用高通滤波（抑制低频轰鸣/风噪）
+            highpass_cutoff_hz: 高通截止频率 (Hz)
+            soft_limit_enable: 是否启用软限幅（降低削波尖锐度）
+            soft_limit_target: 软限幅目标峰值 (0-1)
+            soft_limit_knee: 软限幅曲线强度（越大越“硬”）
         """
         self.target_db = target_db
         self.silence_threshold_db = silence_threshold_db
@@ -82,6 +92,11 @@ class AudioPreprocessor:
         self.adaptive_enable = adaptive_enable
         self.snr_threshold = snr_threshold
         self.remove_dc_offset = remove_dc_offset
+        self.highpass_enable = highpass_enable
+        self.highpass_cutoff_hz = highpass_cutoff_hz
+        self.soft_limit_enable = soft_limit_enable
+        self.soft_limit_target = soft_limit_target
+        self.soft_limit_knee = soft_limit_knee
 
         # 预计算阈值
         self.target_rms = self._db_to_amplitude(target_db)
@@ -156,6 +171,65 @@ class AudioPreprocessor:
     def _amplitude_to_db(amplitude: float) -> float:
         """振幅转 dB"""
         return 20 * np.log10(amplitude + 1e-10)
+
+    @staticmethod
+    def _highpass_filter_single_pole(
+        audio: np.ndarray,
+        *,
+        cutoff_hz: float,
+        sample_rate: int,
+    ) -> np.ndarray:
+        """Simple single-pole high-pass filter (numpy-only).
+
+        This is intentionally lightweight (no scipy dependency) and mainly targets
+        low-frequency rumble / DC-ish drift that hurts VAD + ASR stability.
+        """
+        if len(audio) == 0:
+            return audio
+
+        cutoff = float(cutoff_hz)
+        if not (cutoff > 0.0):
+            return audio
+
+        # RC high-pass: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+        dt = 1.0 / float(sample_rate or 16000)
+        rc = 1.0 / (2.0 * np.pi * cutoff)
+        alpha = rc / (rc + dt)
+
+        out = np.empty_like(audio, dtype=np.float32)
+        out[0] = float(audio[0])
+        prev_x = float(audio[0])
+        prev_y = float(out[0])
+        for i in range(1, len(audio)):
+            x = float(audio[i])
+            y = alpha * (prev_y + x - prev_x)
+            out[i] = y
+            prev_x = x
+            prev_y = y
+        return out.astype(np.float32, copy=False)
+
+    @staticmethod
+    def _soft_limit_tanh(
+        audio: np.ndarray,
+        *,
+        target: float,
+        knee: float,
+    ) -> np.ndarray:
+        """Soft limiter using a tanh curve, scaled to `target` peak."""
+        if len(audio) == 0:
+            return audio
+
+        t = float(target)
+        k = float(knee)
+        if not (0.0 < t <= 1.0):
+            return audio
+        if not (k > 0.0):
+            return audio
+
+        denom = float(np.tanh(k)) or 1.0
+        out = np.tanh(k * audio) / denom
+        out = out * t
+        return out.astype(np.float32, copy=False)
 
     def get_rms(self, audio: np.ndarray) -> float:
         """计算 RMS 值"""
@@ -434,6 +508,22 @@ class AudioPreprocessor:
         # 0. Remove DC offset (helps ASR stability on some recordings).
         if self.remove_dc_offset and len(audio) > 0:
             audio = audio - float(np.mean(audio))
+
+        # 0.1 Optional high-pass (reduce low-frequency rumble).
+        if self.highpass_enable:
+            audio = self._highpass_filter_single_pole(
+                audio,
+                cutoff_hz=self.highpass_cutoff_hz,
+                sample_rate=sample_rate,
+            )
+
+        # 0.2 Optional soft limiting (reduce hard-clipping harshness).
+        if self.soft_limit_enable:
+            audio = self._soft_limit_tanh(
+                audio,
+                target=self.soft_limit_target,
+                knee=self.soft_limit_knee,
+            )
 
         # 自适应预处理：根据 SNR 决定是否需要降噪
         should_denoise = self.denoise_enable

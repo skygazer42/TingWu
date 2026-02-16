@@ -31,6 +31,11 @@ _PREPROCESS_KEYS = {
     "adaptive_enable",
     "snr_threshold",
     "remove_dc_offset",
+    "highpass_enable",
+    "highpass_cutoff_hz",
+    "soft_limit_enable",
+    "soft_limit_target",
+    "soft_limit_knee",
 }
 
 _CHUNKING_KEYS = {
@@ -76,6 +81,11 @@ _PREPROCESS_TYPES: Dict[str, str] = {
     "adaptive_enable": "bool",
     "snr_threshold": "number",
     "remove_dc_offset": "bool",
+    "highpass_enable": "bool",
+    "highpass_cutoff_hz": "number",
+    "soft_limit_enable": "bool",
+    "soft_limit_target": "number",
+    "soft_limit_knee": "number",
 }
 
 _CHUNKING_TYPES: Dict[str, str] = {
@@ -252,6 +262,18 @@ def _validate_ranges(obj: Dict[str, Any]) -> None:
             prop = preprocess.get("denoise_prop")
             if isinstance(prop, (int, float)) and not (0.0 <= float(prop) <= 1.0):
                 raise ValueError("asr_options.preprocess.denoise_prop must be within [0, 1]")
+        if "highpass_cutoff_hz" in preprocess:
+            cutoff = preprocess.get("highpass_cutoff_hz")
+            if isinstance(cutoff, (int, float)) and not (float(cutoff) > 0.0):
+                raise ValueError("asr_options.preprocess.highpass_cutoff_hz must be > 0")
+        if "soft_limit_target" in preprocess:
+            target = preprocess.get("soft_limit_target")
+            if isinstance(target, (int, float)) and not (0.0 < float(target) <= 1.0):
+                raise ValueError("asr_options.preprocess.soft_limit_target must be within (0, 1]")
+        if "soft_limit_knee" in preprocess:
+            knee = preprocess.get("soft_limit_knee")
+            if isinstance(knee, (int, float)) and not (float(knee) > 0.0):
+                raise ValueError("asr_options.preprocess.soft_limit_knee must be > 0")
 
     chunking = obj.get("chunking") or {}
     if isinstance(chunking, dict):

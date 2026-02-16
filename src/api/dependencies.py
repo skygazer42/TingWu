@@ -61,6 +61,12 @@ def _build_request_preprocessor(preprocess_options: Optional[Dict[str, Any]]) ->
         "snr_threshold": settings.audio_snr_threshold,
         # New per-request toggle (defaults to True to match current behavior).
         "remove_dc_offset": True,
+        # Accuracy-first filters (disabled by default unless explicitly enabled).
+        "highpass_enable": False,
+        "highpass_cutoff_hz": 80.0,
+        "soft_limit_enable": False,
+        "soft_limit_target": 0.98,
+        "soft_limit_knee": 2.0,
     }
 
     # Map overrides (API keys match AudioPreprocessor kwargs).
@@ -99,6 +105,8 @@ async def process_audio_file(
             # If preprocessing is effectively disabled, skip extra float conversion.
             should_process = (
                 getattr(preprocessor, "remove_dc_offset", True)
+                or getattr(preprocessor, "highpass_enable", False)
+                or getattr(preprocessor, "soft_limit_enable", False)
                 or preprocessor.normalize_enable
                 or preprocessor.trim_silence_enable
                 or preprocessor.denoise_enable
