@@ -1,5 +1,5 @@
 """API 请求/响应模式"""
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -69,4 +69,22 @@ class MetricsResponse(BaseModel):
     total_audio_seconds: float = Field(..., description="处理音频总时长")
     avg_rtf: float = Field(..., description="平均实时因子")
     llm_cache_stats: Dict[str, Any] = Field(default={}, description="LLM 缓存统计")
+
+
+class BackendCapabilities(BaseModel):
+    """后端能力声明（用于前端探测/提示）"""
+    supports_speaker: bool = Field(..., description="是否支持说话人识别/分离输出")
+    supports_streaming: bool = Field(..., description="是否支持流式转写")
+    supports_hotwords: bool = Field(..., description="是否支持热词（注入或后处理）")
+
+
+class BackendInfoResponse(BaseModel):
+    """后端信息（用于多端口/多模型部署场景的能力探测）"""
+    backend: str = Field(..., description="配置的后端类型（ASR_BACKEND）")
+    info: Dict[str, Any] = Field(default_factory=dict, description="backend.get_info() 输出（安全元信息）")
+    capabilities: BackendCapabilities = Field(..., description="后端能力")
+    speaker_unsupported_behavior: Literal["error", "fallback", "ignore"] = Field(
+        ...,
+        description="当 with_speaker=true 但后端不支持时的行为",
+    )
 

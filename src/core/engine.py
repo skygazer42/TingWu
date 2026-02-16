@@ -812,29 +812,42 @@ class TranscriptionEngine:
         effective_backend_kwargs.update(self._get_request_backend_kwargs(asr_options))
         effective_backend_kwargs.update(kwargs)
 
-        # 检查说话人识别支持
+        raw_result = None
+
+        # 检查说话人识别支持（按配置决定：报错 / 回退 / 忽略）
         if with_speaker and not backend.supports_speaker:
-            if settings.speaker_strict_backend:
+            behavior = settings.speaker_unsupported_behavior_effective
+            backend_name = backend.get_info().get("name", "unknown")
+
+            if behavior == "ignore":
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "ignoring with_speaker=true for this request"
+                )
+                with_speaker = False
+            elif behavior == "error":
                 raise ValueError("backend does not support speaker diarization")
-            logger.warning(
-                f"Backend {backend.get_info()['name']} does not support speaker diarization, "
-                "falling back to PyTorch backend"
-            )
-            # 回退到 loader (PyTorch) 以支持说话人识别
-            raw_result = model_manager.loader.transcribe(
-                audio_input,
-                hotwords=injection_hotwords,
-                with_speaker=with_speaker,
-                **effective_backend_kwargs
-            )
-        else:
-            # 使用配置的后端
+            else:  # fallback
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "falling back to PyTorch backend"
+                )
+                # 回退到 loader (PyTorch) 以支持说话人识别
+                raw_result = model_manager.loader.transcribe(
+                    audio_input,
+                    hotwords=injection_hotwords,
+                    with_speaker=True,
+                    **effective_backend_kwargs,
+                )
+
+        # 使用配置的后端
+        if raw_result is None:
             try:
                 raw_result = backend.transcribe(
                     audio_input,
                     hotwords=injection_hotwords,
                     with_speaker=with_speaker,
-                    **effective_backend_kwargs
+                    **effective_backend_kwargs,
                 )
             except Exception as e:
                 logger.error(f"ASR transcription failed: {e}")
@@ -990,28 +1003,41 @@ class TranscriptionEngine:
         effective_backend_kwargs.update(self._get_request_backend_kwargs(asr_options))
         effective_backend_kwargs.update(kwargs)
 
-        # 检查说话人识别支持
+        raw_result = None
+
+        # 检查说话人识别支持（按配置决定：报错 / 回退 / 忽略）
         if with_speaker and not backend.supports_speaker:
-            if settings.speaker_strict_backend:
+            behavior = settings.speaker_unsupported_behavior_effective
+            backend_name = backend.get_info().get("name", "unknown")
+
+            if behavior == "ignore":
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "ignoring with_speaker=true for this request"
+                )
+                with_speaker = False
+            elif behavior == "error":
                 raise ValueError("backend does not support speaker diarization")
-            logger.warning(
-                f"Backend {backend.get_info()['name']} does not support speaker diarization, "
-                "falling back to PyTorch backend"
-            )
-            raw_result = model_manager.loader.transcribe(
-                audio_input,
-                hotwords=injection_hotwords,
-                with_speaker=with_speaker,
-                **effective_backend_kwargs
-            )
-        else:
-            # 使用配置的后端
+            else:  # fallback
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "falling back to PyTorch backend"
+                )
+                raw_result = model_manager.loader.transcribe(
+                    audio_input,
+                    hotwords=injection_hotwords,
+                    with_speaker=True,
+                    **effective_backend_kwargs,
+                )
+
+        # 使用配置的后端
+        if raw_result is None:
             try:
                 raw_result = backend.transcribe(
                     audio_input,
                     hotwords=injection_hotwords,
                     with_speaker=with_speaker,
-                    **effective_backend_kwargs
+                    **effective_backend_kwargs,
                 )
             except Exception as e:
                 logger.error(f"ASR transcription failed: {e}")
@@ -1134,6 +1160,18 @@ class TranscriptionEngine:
         This is intended for HTTP file transcription where uploads are converted to
         16kHz mono PCM16LE bytes.
         """
+        # If diarization is requested but unsupported, we may ignore it so long-audio
+        # routing still benefits from chunking.
+        backend = model_manager.backend
+        if with_speaker and not backend.supports_speaker:
+            if settings.speaker_unsupported_behavior_effective == "ignore":
+                backend_name = backend.get_info().get("name", "unknown")
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "ignoring with_speaker=true for this request"
+                )
+                with_speaker = False
+
         # Prefer single-pass diarization for meetings; chunking can break speaker consistency.
         if with_speaker:
             return await self.transcribe_async(
@@ -1325,23 +1363,34 @@ class TranscriptionEngine:
             )
 
         logger.info(f"Long audio detected ({duration:.1f}s), using chunked transcription")
+
+        # Prepare backend once (avoid repeating per-chunk work).
+        backend = model_manager.backend
+        backend_name = backend.get_info().get("name", "unknown")
+
+        if with_speaker and not backend.supports_speaker:
+            behavior = settings.speaker_unsupported_behavior_effective
+            if behavior == "ignore":
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "ignoring with_speaker=true for this request"
+                )
+                with_speaker = False
+            elif behavior == "error":
+                raise ValueError("backend does not support speaker diarization")
+            else:  # fallback
+                logger.warning(
+                    f"Backend {backend_name} does not support speaker diarization; "
+                    "falling back to PyTorch backend for long-audio chunking"
+                )
+
         if with_speaker:
             logger.warning(
                 "with_speaker=true with chunking may produce inconsistent speaker mapping/turns; "
                 "prefer non-chunked transcription when possible."
             )
 
-        # Prepare backend + injection hotwords once (avoid repeating per-chunk work).
-        backend = model_manager.backend
         injection_hotwords = self._get_injection_hotwords(hotwords)
-
-        if with_speaker and not backend.supports_speaker:
-            if settings.speaker_strict_backend:
-                raise ValueError("backend does not support speaker diarization")
-            logger.warning(
-                f"Backend {backend.get_info()['name']} does not support speaker diarization, "
-                "falling back to PyTorch backend for long-audio chunking"
-            )
 
         # 分割音频
         chunks = chunker.split(audio, sample_rate)

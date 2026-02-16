@@ -2,12 +2,51 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { useTranscriptionStore } from '@/stores'
-import { Sparkles, Users, BookText, Bot } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { useBackendStore, useTranscriptionStore } from '@/stores'
+import { getBackendInfo } from '@/lib/api'
+import { useMemo } from 'react'
+import { Sparkles, Users, BookText, Bot, Server } from 'lucide-react'
+
+const PRESET_BACKENDS: Array<{ label: string; value: string; baseUrl: string }> = [
+  // Radix Select `value` must be non-empty, so we use a sentinel for relative baseUrl.
+  { label: '当前服务 (相对路径)', value: '__relative__', baseUrl: '' },
+  { label: 'PyTorch (8101)', value: 'http://localhost:8101', baseUrl: 'http://localhost:8101' },
+  { label: 'ONNX (8102)', value: 'http://localhost:8102', baseUrl: 'http://localhost:8102' },
+  { label: 'SenseVoice (8103)', value: 'http://localhost:8103', baseUrl: 'http://localhost:8103' },
+  { label: 'GGUF (8104)', value: 'http://localhost:8104', baseUrl: 'http://localhost:8104' },
+  { label: 'Qwen3 (8201)', value: 'http://localhost:8201', baseUrl: 'http://localhost:8201' },
+  { label: 'VibeVoice (8202)', value: 'http://localhost:8202', baseUrl: 'http://localhost:8202' },
+  { label: 'Router (8200)', value: 'http://localhost:8200', baseUrl: 'http://localhost:8200' },
+]
 
 export function TranscribeOptions() {
   const { options, setOptions, tempHotwords, setTempHotwords } = useTranscriptionStore()
+  const { baseUrl, setBaseUrl } = useBackendStore()
+
+  const backendOptions = useMemo(() => {
+    if (!baseUrl || PRESET_BACKENDS.some((b) => b.value === baseUrl)) {
+      return PRESET_BACKENDS
+    }
+    return [{ label: `自定义: ${baseUrl}`, value: baseUrl, baseUrl }, ...PRESET_BACKENDS]
+  }, [baseUrl])
+
+  const selectedBackendValue = useMemo(() => {
+    const hit = backendOptions.find((b) => b.baseUrl === baseUrl)
+    return hit?.value || '__relative__'
+  }, [backendOptions, baseUrl])
+
+  const backendInfoQuery = useQuery({
+    queryKey: ['backendInfo', baseUrl],
+    queryFn: getBackendInfo,
+    retry: false,
+    staleTime: 30000,
+  })
+
+  const supportsSpeaker = backendInfoQuery.data?.capabilities.supports_speaker
 
   return (
     <Card>
@@ -16,6 +55,78 @@ export function TranscribeOptions() {
         <CardDescription>配置转写参数</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {/* 后端选择 */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <Server className="h-5 w-5 text-muted-foreground" />
+            <div className="flex-1">
+              <Label htmlFor="backend" className="text-base">后端</Label>
+              <p className="text-sm text-muted-foreground">选择本次转写使用的服务地址</p>
+            </div>
+            {backendInfoQuery.isLoading ? (
+              <Badge variant="outline">探测中</Badge>
+            ) : backendInfoQuery.isError ? (
+              <Badge variant="outline" className="border-red-200 text-red-700 bg-red-500/5">
+                未连接
+              </Badge>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">
+                  {String(backendInfoQuery.data?.info?.name || backendInfoQuery.data?.backend || 'backend')}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className={
+                    supportsSpeaker
+                      ? 'border-green-200 text-green-700 bg-green-500/5'
+                      : 'border-amber-200 text-amber-700 bg-amber-500/5'
+                  }
+                >
+                  {supportsSpeaker ? '支持说话人' : '不支持说话人'}
+                </Badge>
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="backend">快速选择</Label>
+              <Select
+                value={selectedBackendValue}
+                onValueChange={(value) => {
+                  const hit = backendOptions.find((b) => b.value === value)
+                  const nextBaseUrl = hit ? hit.baseUrl : value
+                  setBaseUrl(nextBaseUrl)
+                }}
+              >
+                <SelectTrigger id="backend">
+                  <SelectValue placeholder="选择后端..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {backendOptions.map((b) => (
+                    <SelectItem key={b.value} value={b.value}>
+                      {b.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="backend-base-url">Base URL</Label>
+              <Input
+                id="backend-base-url"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+                placeholder="例如: http://localhost:8101"
+              />
+              <p className="text-xs text-muted-foreground">
+                为空表示使用当前页面域名（适合前后端同源部署）。
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* 说话人识别 */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -31,6 +142,34 @@ export function TranscribeOptions() {
             onCheckedChange={(checked) => setOptions({ with_speaker: checked })}
           />
         </div>
+
+        {options.with_speaker && (
+          <div className="ml-8 space-y-3">
+            <div className="space-y-2">
+              <Label htmlFor="speaker-label-style">说话人标签风格</Label>
+              <Select
+                value={options.speaker_label_style || 'numeric'}
+                onValueChange={(value) =>
+                  setOptions({ speaker_label_style: value as typeof options.speaker_label_style })
+                }
+              >
+                <SelectTrigger id="speaker-label-style">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="numeric">数字 (说话人1/2/3)</SelectItem>
+                  <SelectItem value="zh">中文 (说话人甲/乙/丙)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {supportsSpeaker === false && (
+              <p className="text-xs text-muted-foreground">
+                当前后端不支持说话人识别，将自动忽略该开关。
+              </p>
+            )}
+          </div>
+        )}
 
         {/* 热词纠错 */}
         <div className="flex items-center justify-between">

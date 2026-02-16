@@ -38,6 +38,7 @@ const defaultOptions: TranscribeOptions = {
   apply_hotword: true,
   apply_llm: false,
   llm_role: 'default',
+  speaker_label_style: 'numeric',
 }
 
 export const useTranscriptionStore = create<TranscriptionState>((set) => ({

@@ -120,8 +120,11 @@ This keeps the old `transcript` key but improves quality for the meeting scenari
 - add: `speaker_turns?: SpeakerTurn[]` (optional; only present when `with_speaker=true` and diarization produced sentences)
 
 Backends without speaker support:
-- v1 design preference: return **400** when `with_speaker=true` and backend does not support it
-  (avoids silent fallback to a different model, which breaks “one container per model/port” expectations)
+- We must avoid **silent model switching** in per-port deployments.
+- New behavior is configurable via `speaker_unsupported_behavior`:
+  - `error`: return **400** when `with_speaker=true` and backend does not support it (strict)
+  - `fallback`: run PyTorch backend for diarization (legacy single-container convenience)
+  - `ignore`: keep the chosen backend, but treat request as `with_speaker=false` (best for multi-port UX)
 
 ---
 
@@ -155,4 +158,3 @@ We avoid importing FastAPI/Pydantic in unit tests (local env may not have deps).
 - “Speaker-safe chunking”: global diarization or cross-chunk speaker embedding matching.
 - Overlapped speech handling (separation or multi-speaker decoding).
 - Meeting-specific punctuation restoration defaults (punc restore + ITN + paragraphing).
-

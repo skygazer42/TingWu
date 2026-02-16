@@ -4,7 +4,9 @@ from unittest.mock import patch, MagicMock
 
 @pytest.fixture
 def client():
-    with patch('src.core.engine.model_manager') as mock_mm:
+    import src.core.engine as engine_mod
+
+    with patch.object(engine_mod, "model_manager") as mock_mm:
         mock_loader = MagicMock()
         mock_mm.loader = mock_loader
 
