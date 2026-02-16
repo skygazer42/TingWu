@@ -196,3 +196,48 @@ def test_transcribe_auto_async_with_speaker_skips_chunking(mock_model_manager):
     assert out["text"] == "direct"
     engine.transcribe_async.assert_awaited_once()
     engine.transcribe_long_audio.assert_not_called()
+
+
+def test_transcribe_with_speaker_unsupported_backend_can_be_ignored(mock_model_manager, monkeypatch):
+    from src.core.engine import TranscriptionEngine
+
+    mock_model_manager.backend.supports_speaker = False
+    mock_model_manager.backend.transcribe.return_value = {
+        "text": "你好世界",
+        "sentence_info": [{"text": "你好世界", "start": 0, "end": 1000}],
+    }
+
+    # New config: allow per-port deployments to ignore unsupported diarization.
+    monkeypatch.setattr(engine_mod.settings, "speaker_unsupported_behavior", "ignore", raising=False)
+
+    engine = TranscriptionEngine()
+
+    out = engine.transcribe(b"fake_audio", with_speaker=True)
+
+    assert out["text"] == "你好世界"
+    assert out["sentences"] == [{"text": "你好世界", "start": 0, "end": 1000}]
+    assert "speaker_turns" not in out
+    assert "transcript" not in out
+
+    assert mock_model_manager.backend.transcribe.call_count == 1
+    kwargs = mock_model_manager.backend.transcribe.call_args.kwargs
+    assert kwargs.get("with_speaker") is False
+
+
+def test_transcribe_auto_async_with_speaker_ignored_can_still_chunk_long_audio(mock_model_manager, monkeypatch):
+    from src.core.engine import TranscriptionEngine
+
+    mock_model_manager.backend.supports_speaker = False
+    monkeypatch.setattr(engine_mod.settings, "speaker_unsupported_behavior", "ignore", raising=False)
+
+    engine = TranscriptionEngine()
+    engine.transcribe_async = AsyncMock(return_value={"text": "direct"})  # type: ignore[method-assign]
+    engine.transcribe_long_audio = Mock(return_value={"text": "chunked"})  # type: ignore[method-assign]
+
+    audio_bytes = b"\x00" * (120 * 16000 * 2)
+
+    out = asyncio.run(engine.transcribe_auto_async(audio_bytes, with_speaker=True))
+
+    assert out["text"] == "chunked"
+    engine.transcribe_long_audio.assert_called_once()
+    engine.transcribe_async.assert_not_awaited()

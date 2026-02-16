@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     speaker_turn_merge_min_chars: int = 1
     # 后端不支持说话人识别时是否严格报错（避免静默回退到其它模型）
     speaker_strict_backend: bool = True
+    # 新版：后端不支持说话人识别时的行为控制
+    # - error: 直接报错（HTTP 400）
+    # - fallback: 回退到 PyTorch 后端（可能违反“端口=模型”的预期）
+    # - ignore: 忽略说话人（按 with_speaker=false 处理，适合多端口部署）
+    speaker_unsupported_behavior: Optional[Literal["error", "fallback", "ignore"]] = None
 
     # GGUF 后端配置 (FunASR-Nano-GGUF)
     gguf_encoder_path: str = "models/Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx"
@@ -184,6 +189,17 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    @property
+    def speaker_unsupported_behavior_effective(self) -> Literal["error", "fallback", "ignore"]:
+        """Resolve effective unsupported-speaker behavior.
+
+        Prefer the new `speaker_unsupported_behavior` if set, otherwise map legacy
+        `speaker_strict_backend` for backward compatibility.
+        """
+        if self.speaker_unsupported_behavior in ("error", "fallback", "ignore"):
+            return self.speaker_unsupported_behavior
+        return "error" if self.speaker_strict_backend else "fallback"
 
 settings = Settings()
 
