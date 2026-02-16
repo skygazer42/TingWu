@@ -23,6 +23,8 @@ These items are already done in the current workspace:
 - Chunk sentence merge now dedupes overlap sentences (time + tail-text heuristic) (`src/core/audio/chunker.py`) + tests (`tests/test_audio_chunker_sentences.py`)
 - Audio diagnostics now include `dc_offset` + `clipping_ratio` (`src/core/audio/preprocessor.py`) + tests (`tests/test_audio_diagnostics.py`)
 - Preprocessing now removes DC offset by default (`src/core/audio/preprocessor.py`) + tests (`tests/test_audio_preprocess_dc_offset.py`)
+- Normalization supports robust RMS (top-frame percentile) to avoid over-boosting long silences (`src/core/audio/preprocessor.py`) + tests (`tests/test_audio_preprocess_normalize_robust.py`)
+- Adaptive preprocessing now gates denoise OFF for high-SNR audio (avoids damaging clean recordings) (`src/core/audio/preprocessor.py`) + tests (`tests/test_audio_preprocess_denoise_gating.py`)
 - ONNX + GGUF backends now accept TingWu-standard raw PCM16LE bytes (fixes HTTP/chunking compatibility) (`src/models/backends/onnx.py`, `src/models/backends/gguf/backend.py`)
 - Per-request tuning (`asr_options`) is supported + allowlisted (`src/api/asr_options.py`) and plumbed through API → engine → backend
 - Multi-model per-port container deployment with on-demand profiles (`docker-compose.models.yml`, `scripts/start.sh`)
