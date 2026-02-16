@@ -247,6 +247,13 @@ services:
       QWEN3_ASR_MODEL: ${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-1.7B}
       QWEN3_ASR_API_KEY: ${QWEN3_ASR_API_KEY:-EMPTY}
       QWEN3_ASR_TIMEOUT_S: ${QWEN3_ASR_TIMEOUT_S:-60}
+      # Optional: speaker fallback diarization via a helper TingWu service (e.g. tingwu-pytorch).
+      # Enables "说话人1/2/3" output even when Qwen3-ASR itself doesn't support diarization.
+      SPEAKER_FALLBACK_DIARIZATION_ENABLE: ${SPEAKER_FALLBACK_DIARIZATION_ENABLE:-false}
+      SPEAKER_FALLBACK_DIARIZATION_BASE_URL: ${SPEAKER_FALLBACK_DIARIZATION_BASE_URL:-http://tingwu-pytorch:8000}
+      SPEAKER_FALLBACK_DIARIZATION_TIMEOUT_S: ${SPEAKER_FALLBACK_DIARIZATION_TIMEOUT_S:-30}
+      SPEAKER_FALLBACK_MAX_TURN_DURATION_S: ${SPEAKER_FALLBACK_MAX_TURN_DURATION_S:-25}
+      SPEAKER_FALLBACK_MAX_TURNS: ${SPEAKER_FALLBACK_MAX_TURNS:-200}
     depends_on:
       - qwen3-asr
 

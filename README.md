@@ -95,6 +95,12 @@ docker compose -f docker-compose.models.yml down
 
 提示：
 - 打开任意一个 TingWu 容器的前端页面后，可在「转写选项 → 后端」里切换 `Base URL`（例如 `http://localhost:8101` / `8102` / `8201`），前端会把请求发到你选择的端口。
+- Qwen3-ASR **原生不支持说话人识别**。如果你希望在使用 Qwen3 转写时仍然输出 `说话人1/2/3...`，可以启用“fallback diarization”：
+  - 同时启动 `--profile pytorch` 和 `--profile qwen3`
+  - 并给 `tingwu-qwen3` 设置：
+    - `SPEAKER_FALLBACK_DIARIZATION_ENABLE=true`
+    - `SPEAKER_FALLBACK_DIARIZATION_BASE_URL=http://tingwu-pytorch:8000`
+  - 如果辅助服务不可用，会自动回退为普通转写（不会报错）。
 
 #### 请求级调参（`asr_options`，用于准确率 A/B）
 
