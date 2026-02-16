@@ -26,9 +26,10 @@ export function TranscriptView({ result, filename }: TranscriptViewProps) {
   const hasSpeakers = result.sentences.some(s => s.speaker_id !== undefined)
   const hasTurns = (result.speaker_turns?.length ?? 0) > 0
   const hasRawText = !!result.raw_text && result.raw_text !== result.text
+  const bestPlainText = result.transcript || result.text_accu || result.text
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(result.transcript || result.text)
+    await navigator.clipboard.writeText(bestPlainText || '')
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -80,7 +81,7 @@ export function TranscriptView({ result, filename }: TranscriptViewProps) {
             <CardTitle className="text-base">转写结果</CardTitle>
           </CardHeader>
           <CardContent>
-            <Tabs defaultValue="sentences">
+            <Tabs defaultValue={hasTurns ? 'turns' : 'sentences'}>
               <TabsList className="mb-4">
                 <TabsTrigger value="sentences" className="gap-2">
                   <List className="h-4 w-4" />
@@ -135,7 +136,7 @@ export function TranscriptView({ result, filename }: TranscriptViewProps) {
               <TabsContent value="full">
                 <ScrollArea className="h-[400px]">
                   <div className="whitespace-pre-wrap text-sm leading-relaxed p-2">
-                    {result.transcript || result.text}
+                    {bestPlainText}
                   </div>
                 </ScrollArea>
               </TabsContent>

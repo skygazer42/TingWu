@@ -160,7 +160,7 @@ function TimelineLegend({ sentences }: TimelineLegendProps) {
     <div className="flex flex-wrap gap-3 text-xs">
       {Array.from(speakers.entries()).map(([id, speaker]) => {
         const colors = getSpeakerColor(id)
-        const label = speaker || `说话人 ${String.fromCharCode(65 + id)}`
+        const label = speaker || `说话人${id + 1}`
         return (
           <div key={id} className="flex items-center gap-1.5">
             <div className={cn('w-3 h-3 rounded', colors.bg.replace('/10', '/60'))} />

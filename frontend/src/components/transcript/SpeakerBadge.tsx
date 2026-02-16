@@ -14,7 +14,7 @@ export function SpeakerBadge({ speaker, speakerId, className }: SpeakerBadgeProp
   }
 
   const colors = getSpeakerColor(speakerId ?? 0)
-  const label = speaker || `说话人 ${String.fromCharCode(65 + (speakerId ?? 0))}`
+  const label = speaker || `说话人${(speakerId ?? 0) + 1}`
 
   return (
     <Badge
