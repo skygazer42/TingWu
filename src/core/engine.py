@@ -12,7 +12,7 @@ from src.models.model_manager import model_manager
 from src.core.hotword import PhonemeCorrector
 from src.core.hotword.rule_corrector import RuleCorrector
 from src.core.hotword.rectification import RectificationRAG
-from src.core.speaker import SpeakerLabeler
+from src.core.speaker import SpeakerLabeler, build_speaker_turns
 from src.core.llm import LLMClient, LLMMessage, PromptBuilder
 from src.core.llm.roles import get_role
 from src.core.text_processor import TextPostProcessor, PostProcessorSettings
@@ -34,7 +34,7 @@ class TranscriptionEngine:
         )
         self.rule_corrector = RuleCorrector()
         self.rectification_rag = RectificationRAG()
-        self.speaker_labeler = SpeakerLabeler()
+        self.speaker_labeler = SpeakerLabeler(label_style=settings.speaker_label_style)
 
         # 文本后处理器
         self.post_processor = TextPostProcessor.from_config(settings)
@@ -375,6 +375,37 @@ class TranscriptionEngine:
             "is_final",
         }
         return {k: v for k, v in backend_options.items() if isinstance(k, str) and k not in reserved}
+
+    def _get_request_speaker_options(self, asr_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Return request-scoped speaker formatting options.
+
+        `asr_options.speaker.*` overrides Settings defaults for this request only.
+        """
+        speaker_options = None
+        if isinstance(asr_options, dict):
+            speaker_options = asr_options.get("speaker")
+        if not isinstance(speaker_options, dict):
+            speaker_options = {}
+
+        label_style = speaker_options.get("label_style", settings.speaker_label_style)
+        if not isinstance(label_style, str) or not label_style.strip():
+            label_style = settings.speaker_label_style
+        label_style = str(label_style).strip().lower()
+        if label_style not in ("zh", "numeric"):
+            label_style = settings.speaker_label_style
+
+        return {
+            "label_style": label_style,
+            "turn_merge_enable": bool(
+                speaker_options.get("turn_merge_enable", settings.speaker_turn_merge_enable)
+            ),
+            "turn_merge_gap_ms": int(
+                speaker_options.get("turn_merge_gap_ms", settings.speaker_turn_merge_gap_ms)
+            ),
+            "turn_merge_min_chars": int(
+                speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+            ),
+        }
 
     def _apply_corrections(
         self,
@@ -783,6 +814,8 @@ class TranscriptionEngine:
 
         # 检查说话人识别支持
         if with_speaker and not backend.supports_speaker:
+            if settings.speaker_strict_backend:
+                raise ValueError("backend does not support speaker diarization")
             logger.warning(
                 f"Backend {backend.get_info()['name']} does not support speaker diarization, "
                 "falling back to PyTorch backend"
@@ -863,8 +896,15 @@ class TranscriptionEngine:
                     )
 
         # 说话人标注
+        speaker_options = self._get_request_speaker_options(asr_options) if with_speaker else {}
+        speaker_labeler = self.speaker_labeler
+        if with_speaker:
+            label_style = speaker_options.get("label_style", getattr(self.speaker_labeler, "label_style", "zh"))
+            if getattr(self.speaker_labeler, "label_style", "zh") != label_style:
+                speaker_labeler = SpeakerLabeler(label_style=str(label_style))
+
         if with_speaker and sentence_info:
-            sentence_info = self.speaker_labeler.label_speakers(sentence_info)
+            sentence_info = speaker_labeler.label_speakers(sentence_info)
 
         # 构建返回结果
         result = {
@@ -885,10 +925,36 @@ class TranscriptionEngine:
 
         # 生成格式化转写稿
         if with_speaker:
-            result["transcript"] = self.speaker_labeler.format_transcript(
-                result["sentences"],
-                include_timestamp=True
-            )
+            speaker_turns: List[Dict[str, Any]] = []
+            if result["sentences"]:
+                if bool(speaker_options.get("turn_merge_enable", True)):
+                    speaker_turns = build_speaker_turns(
+                        result["sentences"],
+                        gap_ms=int(speaker_options.get("turn_merge_gap_ms", settings.speaker_turn_merge_gap_ms)),
+                        min_chars=int(
+                            speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                        ),
+                    )
+                else:
+                    min_chars = int(
+                        speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                    )
+                    speaker_turns = [
+                        {
+                            "speaker": s.get("speaker"),
+                            "speaker_id": s.get("speaker_id"),
+                            "start": s.get("start", 0),
+                            "end": s.get("end", 0),
+                            "text": s.get("text", ""),
+                            "sentence_count": 1,
+                        }
+                        for s in result["sentences"]
+                        if len(str(s.get("text", "")).strip()) >= min_chars
+                    ]
+
+            result["speaker_turns"] = speaker_turns
+            transcript_source = speaker_turns or result["sentences"]
+            result["transcript"] = speaker_labeler.format_transcript(transcript_source, include_timestamp=True)
 
         return result
 
@@ -926,6 +992,8 @@ class TranscriptionEngine:
 
         # 检查说话人识别支持
         if with_speaker and not backend.supports_speaker:
+            if settings.speaker_strict_backend:
+                raise ValueError("backend does not support speaker diarization")
             logger.warning(
                 f"Backend {backend.get_info()['name']} does not support speaker diarization, "
                 "falling back to PyTorch backend"
@@ -988,8 +1056,15 @@ class TranscriptionEngine:
                 )
 
         # 说话人标注
+        speaker_options = self._get_request_speaker_options(asr_options) if with_speaker else {}
+        speaker_labeler = self.speaker_labeler
+        if with_speaker:
+            label_style = speaker_options.get("label_style", getattr(self.speaker_labeler, "label_style", "zh"))
+            if getattr(self.speaker_labeler, "label_style", "zh") != label_style:
+                speaker_labeler = SpeakerLabeler(label_style=str(label_style))
+
         if with_speaker and sentence_info:
-            sentence_info = self.speaker_labeler.label_speakers(sentence_info)
+            sentence_info = speaker_labeler.label_speakers(sentence_info)
 
         # 构建返回结果
         result = {
@@ -1008,11 +1083,38 @@ class TranscriptionEngine:
             "raw_text": raw_result.get("text", ""),
         }
 
+        # 生成格式化转写稿
         if with_speaker:
-            result["transcript"] = self.speaker_labeler.format_transcript(
-                result["sentences"],
-                include_timestamp=True
-            )
+            speaker_turns: List[Dict[str, Any]] = []
+            if result["sentences"]:
+                if bool(speaker_options.get("turn_merge_enable", True)):
+                    speaker_turns = build_speaker_turns(
+                        result["sentences"],
+                        gap_ms=int(speaker_options.get("turn_merge_gap_ms", settings.speaker_turn_merge_gap_ms)),
+                        min_chars=int(
+                            speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                        ),
+                    )
+                else:
+                    min_chars = int(
+                        speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                    )
+                    speaker_turns = [
+                        {
+                            "speaker": s.get("speaker"),
+                            "speaker_id": s.get("speaker_id"),
+                            "start": s.get("start", 0),
+                            "end": s.get("end", 0),
+                            "text": s.get("text", ""),
+                            "sentence_count": 1,
+                        }
+                        for s in result["sentences"]
+                        if len(str(s.get("text", "")).strip()) >= min_chars
+                    ]
+
+            result["speaker_turns"] = speaker_turns
+            transcript_source = speaker_turns or result["sentences"]
+            result["transcript"] = speaker_labeler.format_transcript(transcript_source, include_timestamp=True)
 
         return result
 
@@ -1032,6 +1134,19 @@ class TranscriptionEngine:
         This is intended for HTTP file transcription where uploads are converted to
         16kHz mono PCM16LE bytes.
         """
+        # Prefer single-pass diarization for meetings; chunking can break speaker consistency.
+        if with_speaker:
+            return await self.transcribe_async(
+                audio_input,
+                with_speaker=with_speaker,
+                apply_hotword=apply_hotword,
+                apply_llm=apply_llm,
+                llm_role=llm_role,
+                hotwords=hotwords,
+                asr_options=asr_options,
+                **kwargs,
+            )
+
         # Fast path: if we can cheaply estimate duration from PCM bytes, route long audio.
         if isinstance(audio_input, (bytes, bytearray)):
             b = bytes(audio_input)
@@ -1210,12 +1325,19 @@ class TranscriptionEngine:
             )
 
         logger.info(f"Long audio detected ({duration:.1f}s), using chunked transcription")
+        if with_speaker:
+            logger.warning(
+                "with_speaker=true with chunking may produce inconsistent speaker mapping/turns; "
+                "prefer non-chunked transcription when possible."
+            )
 
         # Prepare backend + injection hotwords once (avoid repeating per-chunk work).
         backend = model_manager.backend
         injection_hotwords = self._get_injection_hotwords(hotwords)
 
         if with_speaker and not backend.supports_speaker:
+            if settings.speaker_strict_backend:
+                raise ValueError("backend does not support speaker diarization")
             logger.warning(
                 f"Backend {backend.get_info()['name']} does not support speaker diarization, "
                 "falling back to PyTorch backend for long-audio chunking"
@@ -1355,8 +1477,15 @@ class TranscriptionEngine:
                     )
 
         # 说话人标注
+        speaker_options = self._get_request_speaker_options(asr_options) if with_speaker else {}
+        speaker_labeler = self.speaker_labeler
+        if with_speaker:
+            label_style = speaker_options.get("label_style", getattr(self.speaker_labeler, "label_style", "zh"))
+            if getattr(self.speaker_labeler, "label_style", "zh") != label_style:
+                speaker_labeler = SpeakerLabeler(label_style=str(label_style))
+
         if with_speaker and sentence_info:
-            sentence_info = self.speaker_labeler.label_speakers(sentence_info)
+            sentence_info = speaker_labeler.label_speakers(sentence_info)
 
         result = {
             "text": text,
@@ -1376,11 +1505,38 @@ class TranscriptionEngine:
             "chunks": len(chunks),
         }
 
+        # 生成格式化转写稿
         if with_speaker:
-            result["transcript"] = self.speaker_labeler.format_transcript(
-                result["sentences"],
-                include_timestamp=True
-            )
+            speaker_turns: List[Dict[str, Any]] = []
+            if result["sentences"]:
+                if bool(speaker_options.get("turn_merge_enable", True)):
+                    speaker_turns = build_speaker_turns(
+                        result["sentences"],
+                        gap_ms=int(speaker_options.get("turn_merge_gap_ms", settings.speaker_turn_merge_gap_ms)),
+                        min_chars=int(
+                            speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                        ),
+                    )
+                else:
+                    min_chars = int(
+                        speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                    )
+                    speaker_turns = [
+                        {
+                            "speaker": s.get("speaker"),
+                            "speaker_id": s.get("speaker_id"),
+                            "start": s.get("start", 0),
+                            "end": s.get("end", 0),
+                            "text": s.get("text", ""),
+                            "sentence_count": 1,
+                        }
+                        for s in result["sentences"]
+                        if len(str(s.get("text", "")).strip()) >= min_chars
+                    ]
+
+            result["speaker_turns"] = speaker_turns
+            transcript_source = speaker_turns or result["sentences"]
+            result["transcript"] = speaker_labeler.format_transcript(transcript_source, include_timestamp=True)
 
         logger.info(f"Long audio transcription completed: {len(chunks)} chunks, {duration:.1f}s")
         return result
