@@ -292,6 +292,8 @@ class TranscriptionEngine:
             itn_enable=settings.itn_enable,
             itn_erhua_remove=settings.itn_erhua_remove,
             spacing_cjk_ascii_enable=settings.spacing_cjk_ascii_enable,
+            spoken_punc_enable=settings.spoken_punc_enable,
+            acronym_merge_enable=settings.acronym_merge_enable,
             zh_convert_enable=settings.zh_convert_enable,
             zh_convert_locale=settings.zh_convert_locale,
             punc_convert_enable=settings.punc_convert_enable,

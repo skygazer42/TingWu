@@ -241,3 +241,16 @@ def test_transcribe_auto_async_with_speaker_ignored_can_still_chunk_long_audio(m
     assert out["text"] == "chunked"
     engine.transcribe_long_audio.assert_called_once()
     engine.transcribe_async.assert_not_awaited()
+
+
+def test_request_post_processor_inherits_global_acronym_merge_default(mock_model_manager, monkeypatch):
+    from src.core.engine import TranscriptionEngine
+
+    monkeypatch.setattr(engine_mod.settings, "acronym_merge_enable", True, raising=False)
+
+    engine = TranscriptionEngine()
+
+    # Non-empty postprocess override forces request-scoped postprocessor creation.
+    pp = engine._get_request_post_processor(asr_options={"postprocess": {"punc_merge_enable": False}})
+
+    assert pp.process("A I 技术") == "AI 技术"
