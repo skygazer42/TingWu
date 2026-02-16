@@ -5,7 +5,9 @@ from unittest.mock import patch, Mock, MagicMock
 
 def test_full_pipeline():
     """测试完整转写流程"""
-    with patch('src.core.engine.model_manager') as mock_mm:
+    import src.core.engine as engine_mod
+
+    with patch.object(engine_mod, "model_manager") as mock_mm:
         mock_backend = MagicMock()
         mock_backend.supports_speaker = True
         mock_backend.transcribe.return_value = {
@@ -35,7 +37,9 @@ def test_full_pipeline():
 
 def test_multi_speaker_pipeline():
     """测试多说话人流程"""
-    with patch('src.core.engine.model_manager') as mock_mm:
+    import src.core.engine as engine_mod
+
+    with patch.object(engine_mod, "model_manager") as mock_mm:
         mock_backend = MagicMock()
         mock_backend.supports_speaker = True
         mock_backend.transcribe.return_value = {

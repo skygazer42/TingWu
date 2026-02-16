@@ -5,7 +5,9 @@ import io
 
 @pytest.fixture
 def client():
-    with patch('src.core.engine.model_manager') as mock_mm:
+    import src.core.engine as engine_mod
+
+    with patch.object(engine_mod, "model_manager") as mock_mm:
         # App lifespan triggers `transcription_engine.warmup()`, which uses
         # `model_manager.backend`. Mock backend to avoid loading real models.
         mock_backend = MagicMock()
@@ -34,6 +36,22 @@ def test_root_endpoint(client):
     response = client.get("/")
     assert response.status_code == 200
     assert "name" in response.json()
+
+
+def test_backend_info_endpoint(client):
+    response = client.get("/api/v1/backend")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["backend"]
+    assert isinstance(data["info"], dict)
+
+    caps = data["capabilities"]
+    assert caps["supports_speaker"] is True
+    assert caps["supports_streaming"] is False
+    assert caps["supports_hotwords"] is False
+
+    assert data["speaker_unsupported_behavior"] in {"error", "fallback", "ignore"}
 
 def test_transcribe_endpoint(client):
     """测试转写接口"""
