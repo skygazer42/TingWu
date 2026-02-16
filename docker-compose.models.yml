@@ -28,6 +28,9 @@ x-tingwu-env: &tingwu-env
   <<: *proxy-env
   DEBUG: ${DEBUG:-false}
   HOTWORDS_THRESHOLD: ${HOTWORDS_THRESHOLD:-0.85}
+  # Speaker diarization is backend-specific. For per-port deployments we prefer
+  # "ignore" so non-speaker backends still return a normal transcript.
+  SPEAKER_UNSUPPORTED_BEHAVIOR: ${SPEAKER_UNSUPPORTED_BEHAVIOR:-ignore}
 
   # Default runtime settings (can be overridden per-service).
   DEVICE: ${DEVICE:-cuda}
