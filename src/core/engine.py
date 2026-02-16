@@ -15,7 +15,7 @@ from src.core.hotword.rectification import RectificationRAG
 from src.core.speaker import SpeakerLabeler
 from src.core.llm import LLMClient, LLMMessage, PromptBuilder
 from src.core.llm.roles import get_role
-from src.core.text_processor import TextPostProcessor
+from src.core.text_processor import TextPostProcessor, PostProcessorSettings
 from src.core.text_processor.text_corrector import TextCorrector
 from src.core.audio.chunker import AudioChunker
 
@@ -233,7 +233,108 @@ class TranscriptionEngine:
         hotwords_to_inject = self._hotwords_list[:max_count]
         return "\n".join(hotwords_to_inject)
 
-    def _apply_corrections(self, text: str) -> Tuple[str, List[Tuple[str, str, float]]]:
+    def _get_request_post_processor(self, asr_options: Optional[Dict[str, Any]]) -> TextPostProcessor:
+        """Build a request-scoped post-processor (does not mutate global settings)."""
+        postprocess_options = None
+        if isinstance(asr_options, dict):
+            postprocess_options = asr_options.get("postprocess")
+
+        if not isinstance(postprocess_options, dict) or not postprocess_options:
+            return self.post_processor
+
+        # Base from current Settings, then override known keys.
+        pp_settings = PostProcessorSettings(
+            filler_remove_enable=settings.filler_remove_enable,
+            filler_aggressive=settings.filler_aggressive,
+            qj2bj_enable=settings.qj2bj_enable,
+            itn_enable=settings.itn_enable,
+            itn_erhua_remove=settings.itn_erhua_remove,
+            spacing_cjk_ascii_enable=settings.spacing_cjk_ascii_enable,
+            zh_convert_enable=settings.zh_convert_enable,
+            zh_convert_locale=settings.zh_convert_locale,
+            punc_convert_enable=settings.punc_convert_enable,
+            punc_add_space=settings.punc_add_space,
+            punc_restore_enable=settings.punc_restore_enable,
+            punc_restore_model=settings.punc_restore_model,
+            punc_restore_device=settings.device,
+            punc_merge_enable=settings.punc_merge_enable,
+            trash_punc_enable=settings.trash_punc_enable,
+            trash_punc_chars=settings.trash_punc_chars,
+        )
+        for k, v in postprocess_options.items():
+            if hasattr(pp_settings, k):
+                setattr(pp_settings, k, v)
+
+        return TextPostProcessor(pp_settings)
+
+    def _get_request_chunker(self, asr_options: Optional[Dict[str, Any]]) -> AudioChunker:
+        """Build a request-scoped AudioChunker based on `asr_options.chunking`."""
+        import math
+
+        chunking_options = None
+        if isinstance(asr_options, dict):
+            chunking_options = asr_options.get("chunking")
+
+        if not isinstance(chunking_options, dict) or not chunking_options:
+            return self.audio_chunker
+
+        # Base from current engine chunker.
+        silence_threshold_db = -40.0
+        try:
+            if getattr(self.audio_chunker, "silence_threshold", None):
+                silence_threshold_db = 20.0 * math.log10(float(self.audio_chunker.silence_threshold))
+        except Exception:
+            silence_threshold_db = -40.0
+
+        max_chunk = float(chunking_options.get("max_chunk_duration_s", self.audio_chunker.max_chunk_duration))
+        min_chunk = float(chunking_options.get("min_chunk_duration_s", self.audio_chunker.min_chunk_duration))
+        overlap = float(chunking_options.get("overlap_duration_s", self.audio_chunker.overlap_duration))
+        silence_db = float(chunking_options.get("silence_threshold_db", silence_threshold_db))
+        min_silence = float(chunking_options.get("min_silence_duration_s", self.audio_chunker.min_silence_duration))
+
+        # Best-effort sanity constraints.
+        if max_chunk <= 0:
+            max_chunk = self.audio_chunker.max_chunk_duration
+        if min_chunk < 0:
+            min_chunk = self.audio_chunker.min_chunk_duration
+        if overlap < 0:
+            overlap = self.audio_chunker.overlap_duration
+
+        return AudioChunker(
+            max_chunk_duration=max_chunk,
+            min_chunk_duration=min_chunk,
+            overlap_duration=overlap,
+            silence_threshold_db=silence_db,
+            min_silence_duration=min_silence,
+        )
+
+    def _get_request_backend_kwargs(self, asr_options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Return backend kwargs derived from `asr_options.backend` (reserved keys removed)."""
+        backend_options = None
+        if isinstance(asr_options, dict):
+            backend_options = asr_options.get("backend")
+
+        if not isinstance(backend_options, dict) or not backend_options:
+            return {}
+
+        reserved = {
+            "input",
+            "audio_input",
+            "hotword",
+            "hotwords",
+            "with_speaker",
+            "cache",
+            "is_final",
+        }
+        return {k: v for k, v in backend_options.items() if isinstance(k, str) and k not in reserved}
+
+    def _apply_corrections(
+        self,
+        text: str,
+        *,
+        post_processor: Optional[TextPostProcessor] = None,
+        correction_pipeline: Optional[str] = None,
+    ) -> Tuple[str, List[Tuple[str, str, float]]]:
         """应用纠错管线
 
         按 correction_pipeline 配置的顺序执行各纠错步骤。
@@ -244,7 +345,9 @@ class TranscriptionEngine:
         """
         original = text
         all_similars: List[Tuple[str, str, float]] = []
-        pipeline = [s.strip() for s in settings.correction_pipeline.split(',') if s.strip()]
+        pipeline_str = correction_pipeline or settings.correction_pipeline
+        pipeline = [s.strip() for s in pipeline_str.split(',') if s.strip()]
+        pp = post_processor or self.post_processor
 
         for step in pipeline:
             if step == "hotword" and self._hotwords_loaded and text:
@@ -268,7 +371,7 @@ class TranscriptionEngine:
                     logger.debug(f"Text correction: {prev!r} -> {text!r}, errors={errors}")
 
             elif step == "post_process":
-                text = self.post_processor.process(text)
+                text = pp.process(text)
 
         if text != original:
             logger.debug(f"Total correction: {original!r} -> {text!r}")
@@ -590,6 +693,7 @@ class TranscriptionEngine:
         apply_llm: bool = False,
         llm_role: str = "default",
         hotwords: Optional[str] = None,
+        asr_options: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -602,6 +706,7 @@ class TranscriptionEngine:
             apply_llm: 是否应用 LLM 润色
             llm_role: LLM 角色（default/translator/code）
             hotwords: 自定义热词（覆盖已加载的热词）
+            asr_options: 每请求 ASR 调参 (preprocess/chunking/backend/postprocess)
             **kwargs: 其他参数传递给 ASR 模型
 
         Returns:
@@ -612,6 +717,12 @@ class TranscriptionEngine:
 
         # 获取注入热词
         injection_hotwords = self._get_injection_hotwords(hotwords)
+
+        # Per-request overrides (do not mutate globals).
+        post_processor = self._get_request_post_processor(asr_options)
+        effective_backend_kwargs: Dict[str, Any] = {}
+        effective_backend_kwargs.update(self._get_request_backend_kwargs(asr_options))
+        effective_backend_kwargs.update(kwargs)
 
         # 检查说话人识别支持
         if with_speaker and not backend.supports_speaker:
@@ -624,7 +735,7 @@ class TranscriptionEngine:
                 audio_input,
                 hotwords=injection_hotwords,
                 with_speaker=with_speaker,
-                **kwargs
+                **effective_backend_kwargs
             )
         else:
             # 使用配置的后端
@@ -633,7 +744,7 @@ class TranscriptionEngine:
                     audio_input,
                     hotwords=injection_hotwords,
                     with_speaker=with_speaker,
-                    **kwargs
+                    **effective_backend_kwargs
                 )
             except Exception as e:
                 logger.error(f"ASR transcription failed: {e}")
@@ -652,11 +763,14 @@ class TranscriptionEngine:
         # 热词纠错 - 收集相似词候选
         all_similars: List[Tuple[str, str, float]] = []
         if apply_hotword:
-            text, similars = self._apply_corrections(text)
+            text, similars = self._apply_corrections(text, post_processor=post_processor)
             all_similars.extend(similars)
             # 同时纠错每个句子的文本
             for sent in sentence_info:
-                sent["text"], sent_similars = self._apply_corrections(sent.get("text", ""))
+                sent["text"], sent_similars = self._apply_corrections(
+                    sent.get("text", ""),
+                    post_processor=post_processor,
+                )
                 all_similars.extend(sent_similars)
 
         # 去重相似词候选
@@ -728,6 +842,7 @@ class TranscriptionEngine:
         apply_llm: bool = False,
         llm_role: str = "default",
         hotwords: Optional[str] = None,
+        asr_options: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -745,6 +860,12 @@ class TranscriptionEngine:
         # 获取注入热词
         injection_hotwords = self._get_injection_hotwords(hotwords)
 
+        # Per-request overrides (do not mutate globals).
+        post_processor = self._get_request_post_processor(asr_options)
+        effective_backend_kwargs: Dict[str, Any] = {}
+        effective_backend_kwargs.update(self._get_request_backend_kwargs(asr_options))
+        effective_backend_kwargs.update(kwargs)
+
         # 检查说话人识别支持
         if with_speaker and not backend.supports_speaker:
             logger.warning(
@@ -755,7 +876,7 @@ class TranscriptionEngine:
                 audio_input,
                 hotwords=injection_hotwords,
                 with_speaker=with_speaker,
-                **kwargs
+                **effective_backend_kwargs
             )
         else:
             # 使用配置的后端
@@ -764,7 +885,7 @@ class TranscriptionEngine:
                     audio_input,
                     hotwords=injection_hotwords,
                     with_speaker=with_speaker,
-                    **kwargs
+                    **effective_backend_kwargs
                 )
             except Exception as e:
                 logger.error(f"ASR transcription failed: {e}")
@@ -783,10 +904,13 @@ class TranscriptionEngine:
         # 热词纠错 - 收集相似词候选
         all_similars: List[Tuple[str, str, float]] = []
         if apply_hotword:
-            text, similars = self._apply_corrections(text)
+            text, similars = self._apply_corrections(text, post_processor=post_processor)
             all_similars.extend(similars)
             for sent in sentence_info:
-                sent["text"], sent_similars = self._apply_corrections(sent.get("text", ""))
+                sent["text"], sent_similars = self._apply_corrections(
+                    sent.get("text", ""),
+                    post_processor=post_processor,
+                )
                 all_similars.extend(sent_similars)
 
         # 去重相似词候选
@@ -833,6 +957,73 @@ class TranscriptionEngine:
 
         return result
 
+    async def transcribe_auto_async(
+        self,
+        audio_input: Union[bytes, str, Path],
+        with_speaker: bool = False,
+        apply_hotword: bool = True,
+        apply_llm: bool = False,
+        llm_role: str = "default",
+        hotwords: Optional[str] = None,
+        asr_options: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Async auto-routing: use chunked transcription for long PCM inputs.
+
+        This is intended for HTTP file transcription where uploads are converted to
+        16kHz mono PCM16LE bytes.
+        """
+        # Fast path: if we can cheaply estimate duration from PCM bytes, route long audio.
+        if isinstance(audio_input, (bytes, bytearray)):
+            b = bytes(audio_input)
+            try:
+                from src.core.audio.pcm import is_wav_bytes
+            except Exception:
+                is_wav_bytes = lambda _d: False  # type: ignore[assignment]
+
+            duration_s = 0.0
+            if is_wav_bytes(b):
+                # WAV bytes: compute duration using stdlib `wave` without decoding full audio.
+                try:
+                    import io
+                    import wave
+
+                    with wave.open(io.BytesIO(b), "rb") as wf:
+                        frames = wf.getnframes()
+                        sr = wf.getframerate() or 1
+                        duration_s = float(frames) / float(sr)
+                except Exception:
+                    duration_s = 0.0
+            else:
+                # Raw PCM16LE 16k mono.
+                duration_s = float(len(b)) / float(2 * 16000)
+
+            max_chunk_duration_s = float(self._get_request_chunker(asr_options).max_chunk_duration)
+            if duration_s > max_chunk_duration_s:
+                # Chunked path is heavier; run it off the event loop.
+                return await asyncio.to_thread(
+                    self.transcribe_long_audio,
+                    audio_input,
+                    with_speaker=with_speaker,
+                    apply_hotword=apply_hotword,
+                    apply_llm=apply_llm,
+                    llm_role=llm_role,
+                    hotwords=hotwords,
+                    asr_options=asr_options,
+                    **kwargs,
+                )
+
+        return await self.transcribe_async(
+            audio_input,
+            with_speaker=with_speaker,
+            apply_hotword=apply_hotword,
+            apply_llm=apply_llm,
+            llm_role=llm_role,
+            hotwords=hotwords,
+            asr_options=asr_options,
+            **kwargs,
+        )
+
     def transcribe_long_audio(
         self,
         audio_input: Union[bytes, str, Path, np.ndarray],
@@ -841,6 +1032,7 @@ class TranscriptionEngine:
         apply_llm: bool = False,
         llm_role: str = "default",
         hotwords: Optional[str] = None,
+        asr_options: Optional[Dict[str, Any]] = None,
         max_workers: int = 2,
         sample_rate: int = 16000,
         **kwargs
@@ -865,75 +1057,165 @@ class TranscriptionEngine:
         Returns:
             转写结果字典
         """
-        from src.core.audio.preprocessor import AudioPreprocessor
+        from src.core.audio.pcm import (
+            is_wav_bytes,
+            pcm16le_bytes_to_float32,
+            wav_bytes_to_float32,
+            float32_to_pcm16le_bytes,
+        )
 
-        # 加载音频为 numpy 数组
+        # Decode into float32 waveform for chunking, and normalize to PCM16LE bytes
+        # for backend compatibility (remote backends require bytes, not numpy arrays).
+        audio_pcm_bytes: Optional[bytes] = None
+
+        # Per-request overrides (do not mutate globals).
+        chunker = self._get_request_chunker(asr_options)
+        post_processor = self._get_request_post_processor(asr_options)
+        effective_backend_kwargs: Dict[str, Any] = {}
+        effective_backend_kwargs.update(self._get_request_backend_kwargs(asr_options))
+        effective_backend_kwargs.update(kwargs)
+
+        chunking_options = None
+        if isinstance(asr_options, dict):
+            chunking_options = asr_options.get("chunking")
+        if isinstance(chunking_options, dict):
+            if isinstance(chunking_options.get("max_workers"), int):
+                max_workers = int(chunking_options["max_workers"])
+            overlap_chars = int(chunking_options.get("overlap_chars", 20) or 0)
+        else:
+            overlap_chars = 20
+
         if isinstance(audio_input, np.ndarray):
-            audio = audio_input
+            audio = audio_input.astype(np.float32, copy=False)
+            audio_pcm_bytes = float32_to_pcm16le_bytes(audio)
+
+        elif isinstance(audio_input, (bytes, bytearray)):
+            data = bytes(audio_input)
+            if is_wav_bytes(data):
+                audio, sr = wav_bytes_to_float32(data)
+                if sr != sample_rate:
+                    # Best-effort resample if librosa is available in the runtime.
+                    try:
+                        import librosa
+
+                        audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
+                    except Exception as e:
+                        raise ValueError(
+                            f"Unsupported WAV sample_rate={sr}, expected {sample_rate}"
+                        ) from e
+                audio_pcm_bytes = float32_to_pcm16le_bytes(audio)
+            else:
+                audio_pcm_bytes = data
+                audio = pcm16le_bytes_to_float32(audio_pcm_bytes)
+
         elif isinstance(audio_input, (str, Path)):
-            preprocessor = AudioPreprocessor()
-            audio, sr = preprocessor.load(str(audio_input))
+            p = Path(audio_input)
+            data = p.read_bytes()
+            if not is_wav_bytes(data):
+                raise ValueError(
+                    f"Unsupported audio file for long-audio chunking: {p.suffix}. "
+                    "Please provide 16k PCM bytes (s16le) or a WAV file."
+                )
+            audio, sr = wav_bytes_to_float32(data)
             if sr != sample_rate:
-                import librosa
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
-        elif isinstance(audio_input, bytes):
-            import soundfile as sf
-            import io
-            audio, sr = sf.read(io.BytesIO(audio_input), dtype='float32')
-            if sr != sample_rate:
-                import librosa
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
+                try:
+                    import librosa
+
+                    audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
+                except Exception as e:
+                    raise ValueError(
+                        f"Unsupported WAV sample_rate={sr}, expected {sample_rate}"
+                    ) from e
+            audio_pcm_bytes = float32_to_pcm16le_bytes(audio)
+
         else:
             raise ValueError(f"Unsupported audio input type: {type(audio_input)}")
 
         # 检查音频长度，短音频直接转写
         duration = len(audio) / sample_rate
-        if duration <= self.audio_chunker.max_chunk_duration:
+        if duration <= chunker.max_chunk_duration:
             logger.info(f"Audio is short ({duration:.1f}s), using direct transcription")
             return self.transcribe(
-                audio_input,
+                audio_pcm_bytes or audio_input,
                 with_speaker=with_speaker,
                 apply_hotword=apply_hotword,
                 apply_llm=apply_llm,
                 llm_role=llm_role,
                 hotwords=hotwords,
+                asr_options=asr_options,
                 **kwargs
             )
 
         logger.info(f"Long audio detected ({duration:.1f}s), using chunked transcription")
 
+        # Prepare backend + injection hotwords once (avoid repeating per-chunk work).
+        backend = model_manager.backend
+        injection_hotwords = self._get_injection_hotwords(hotwords)
+
+        if with_speaker and not backend.supports_speaker:
+            logger.warning(
+                f"Backend {backend.get_info()['name']} does not support speaker diarization, "
+                "falling back to PyTorch backend for long-audio chunking"
+            )
+
         # 分割音频
-        chunks = self.audio_chunker.split(audio, sample_rate)
+        chunks = chunker.split(audio, sample_rate)
 
         # 定义单块转写函数
         def transcribe_chunk(chunk_audio: np.ndarray) -> Dict[str, Any]:
-            return self.transcribe(
-                chunk_audio,
-                with_speaker=with_speaker,
-                apply_hotword=apply_hotword,
-                apply_llm=False,  # LLM 在合并后统一处理
-                hotwords=hotwords,
-                **kwargs
-            )
+            # Always use PCM bytes for backend compatibility (remote backends don't accept numpy).
+            chunk_bytes = float32_to_pcm16le_bytes(chunk_audio)
+
+            if with_speaker and not backend.supports_speaker:
+                raw_result = model_manager.loader.transcribe(
+                    chunk_bytes,
+                    hotwords=injection_hotwords,
+                    with_speaker=with_speaker,
+                    **effective_backend_kwargs,
+                )
+            else:
+                raw_result = backend.transcribe(
+                    chunk_bytes,
+                    hotwords=injection_hotwords,
+                    with_speaker=with_speaker,
+                    **effective_backend_kwargs,
+                )
+
+            return {
+                "text": raw_result.get("text", ""),
+                "sentences": raw_result.get("sentence_info", []),
+            }
 
         # 并行处理分块
-        chunk_results = self.audio_chunker.process_parallel(
+        chunk_results = chunker.process_parallel(
             chunks, transcribe_chunk, max_workers=max_workers
         )
 
         # 合并结果
-        merged = self.audio_chunker.merge_results(chunk_results, sample_rate)
+        merged = chunker.merge_results(chunk_results, sample_rate, overlap_chars=overlap_chars)
 
-        text = merged.get("text", "")
-        sentences = merged.get("sentences", [])
+        raw_text = merged.get("text", "")
+        sentence_info = merged.get("sentences", [])
 
-        # 对合并后的文本进行热词检索，收集相似词候选
+        text = raw_text
+
         all_similars: List[Tuple[str, str, float]] = []
-        if apply_hotword and text and self._hotwords_loaded:
-            # 对合并后的全文进行热词匹配，收集相似词候选
-            correction = self.corrector.correct(text)
-            all_similars.extend(correction.similars)
-            all_similars = self._dedupe_similars(all_similars)
+
+        # 合并后统一应用纠错与后处理，避免破坏 chunk overlap 对齐。
+        if apply_hotword and text:
+            text, similars = self._apply_corrections(text, post_processor=post_processor)
+            all_similars.extend(similars)
+
+            # 同时纠错每个句子的文本
+            for sent in sentence_info:
+                sent["text"], sent_similars = self._apply_corrections(
+                    sent.get("text", ""),
+                    post_processor=post_processor,
+                )
+                all_similars.extend(sent_similars)
+
+        # 去重相似词候选
+        all_similars = self._dedupe_similars(all_similars)
 
         # 全文 LLM 润色 - 传入相似词候选
         if apply_llm and text:
@@ -965,19 +1247,29 @@ class TranscriptionEngine:
                     )
 
         # 说话人标注
-        if with_speaker and sentences:
-            sentences = self.speaker_labeler.label_speakers(sentences)
+        if with_speaker and sentence_info:
+            sentence_info = self.speaker_labeler.label_speakers(sentence_info)
 
         result = {
             "text": text,
-            "sentences": sentences,
+            "sentences": [
+                {
+                    "text": s.get("text", ""),
+                    "start": s.get("start", 0),
+                    "end": s.get("end", 0),
+                    **({"speaker": s.get("speaker"), "speaker_id": s.get("speaker_id")}
+                       if with_speaker else {})
+                }
+                for s in sentence_info
+            ],
+            "raw_text": raw_text,
             "duration": duration,
             "chunks": len(chunks),
         }
 
         if with_speaker:
             result["transcript"] = self.speaker_labeler.format_transcript(
-                sentences,
+                result["sentences"],
                 include_timestamp=True
             )
 

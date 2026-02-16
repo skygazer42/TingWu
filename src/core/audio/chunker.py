@@ -9,6 +9,8 @@ from typing import List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 
+from src.core.text_processor.text_merge import merge_by_text
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,10 +152,14 @@ class AudioChunker:
             best_split = target_end
             search_start = max(current_start + min_samples, target_end - max_samples // 4)
 
+            # Select the latest (closest-to-target_end) silence point within the search range.
+            # This reduces unnecessary early splits and lowers boundary cut risk.
             for point in silence_points:
-                if search_start <= point <= target_end:
-                    best_split = point
+                if point < search_start:
+                    continue
+                if point > target_end:
                     break
+                best_split = point
 
             # 添加分块 (包含重叠)
             chunk_end = min(best_split + overlap_samples, len(audio))
@@ -267,10 +273,11 @@ class AudioChunker:
         # 按起始位置排序
         sorted_results = sorted(chunk_results, key=lambda x: x["start_sample"])
 
-        texts = []
+        merged_text = ""
         all_sentences = []
+        prev_end_sample: Optional[int] = None
 
-        for i, result in enumerate(sorted_results):
+        for result in sorted_results:
             if not result["success"]:
                 continue
 
@@ -278,30 +285,50 @@ class AudioChunker:
             text = chunk_result.get("text", "")
             sentences = chunk_result.get("sentences", [])
 
+            start_sample = int(result.get("start_sample", 0) or 0)
+            end_sample = int(result.get("end_sample", 0) or 0)
+
             # 时间偏移
-            time_offset_ms = int(result["start_sample"] / sample_rate * 1000)
+            time_offset_ms = int(start_sample / sample_rate * 1000)
+
+            # Overlap window (ms) between previous successful chunk and current chunk.
+            overlap_ms = 0
+            if prev_end_sample is not None and prev_end_sample > start_sample:
+                overlap_samples = prev_end_sample - start_sample
+                overlap_ms = int(overlap_samples / sample_rate * 1000)
+
+            # Snapshot of already-merged text before integrating this chunk.
+            prev_text_snapshot = merged_text
+            tail_len = max(200, int(overlap_chars) * 4) if overlap_chars > 0 else 200
+            prev_tail = prev_text_snapshot[-tail_len:]
+            overlap_end_ms = time_offset_ms + overlap_ms + 50  # small tolerance for rounding/jitter
 
             # 调整句子时间戳
             for sent in sentences:
+                sent_text = sent.get("text", "")
                 sent["start"] = sent.get("start", 0) + time_offset_ms
                 sent["end"] = sent.get("end", 0) + time_offset_ms
+
+                # Dedupe sentences that fall completely inside the overlap region and
+                # are already present in the previously merged text tail.
+                if overlap_ms > 0 and sent_text and sent["end"] <= overlap_end_ms:
+                    if sent_text in prev_tail:
+                        continue
+
                 all_sentences.append(sent)
 
-            # 去除重叠文本
-            if i > 0 and texts and text and overlap_chars > 0:
-                prev_text = texts[-1]
-                # 查找重叠部分
-                for j in range(min(overlap_chars * 2, len(prev_text)), 0, -1):
-                    suffix = prev_text[-j:]
-                    if text.startswith(suffix):
-                        text = text[j:]
-                        break
-
             if text:
-                texts.append(text)
+                merged_text = merge_by_text(
+                    merged_text,
+                    text,
+                    overlap_chars=max(0, int(overlap_chars)),
+                )
+
+            if end_sample > 0:
+                prev_end_sample = end_sample if prev_end_sample is None else max(prev_end_sample, end_sample)
 
         return {
-            "text": "".join(texts),
+            "text": merged_text,
             "sentences": all_sentences,
         }
 

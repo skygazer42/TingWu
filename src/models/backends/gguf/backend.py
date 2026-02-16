@@ -343,14 +343,28 @@ class GGUFBackend(ASRBackend):
         if isinstance(audio_input, np.ndarray):
             return audio_input.astype(np.float32)
 
-        if isinstance(audio_input, bytes):
-            import soundfile as sf
-            import io
-            audio, sr = sf.read(io.BytesIO(audio_input), dtype='float32')
-            if sr != 16000:
-                import librosa
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
-            return audio
+        if isinstance(audio_input, (bytes, bytearray)):
+            data = bytes(audio_input)
+
+            # TingWu's HTTP layer uses raw PCM16LE (16kHz, mono) bytes.
+            # Keep compatibility with WAV container bytes too.
+            is_wav = len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WAVE"
+            if is_wav:
+                import io
+                import soundfile as sf
+
+                audio, sr = sf.read(io.BytesIO(data), dtype="float32")
+                if sr != 16000:
+                    import librosa
+
+                    audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+                return audio
+
+            # Raw PCM16LE 16k mono.
+            if len(data) % 2 != 0:
+                data = data[: len(data) - 1]
+            audio_i16 = np.frombuffer(data, dtype=np.int16)
+            return audio_i16.astype(np.float32) / 32768.0
 
         if isinstance(audio_input, (str, Path)):
             import soundfile as sf

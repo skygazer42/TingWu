@@ -1,7 +1,7 @@
 """API 依赖注入"""
 import os
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional, Any, Dict
 import numpy as np
 import aiofiles
 import ffmpeg
@@ -36,7 +36,46 @@ def get_audio_preprocessor() -> AudioPreprocessor:
     return _audio_preprocessor
 
 
-async def process_audio_file(file: UploadFile) -> AsyncGenerator[bytes, None]:
+def _build_request_preprocessor(preprocess_options: Optional[Dict[str, Any]]) -> AudioPreprocessor:
+    """Build a request-scoped AudioPreprocessor from settings + overrides.
+
+    This must not mutate global `settings` or the singleton preprocessor instance.
+    """
+    if not preprocess_options:
+        return get_audio_preprocessor()
+
+    # Defaults from Settings.
+    cfg = {
+        "target_db": settings.audio_normalize_target_db,
+        "silence_threshold_db": settings.audio_silence_threshold_db,
+        "min_silence_ms": 500,
+        "normalize_enable": settings.audio_normalize_enable,
+        "trim_silence_enable": settings.audio_trim_silence_enable,
+        "denoise_enable": settings.audio_denoise_enable,
+        "denoise_prop": settings.audio_denoise_prop,
+        "denoise_backend": settings.audio_denoise_backend,
+        "vocal_separate_enable": settings.audio_vocal_separate_enable,
+        "vocal_separate_model": settings.audio_vocal_separate_model,
+        "device": settings.device,
+        "adaptive_enable": settings.audio_adaptive_preprocess,
+        "snr_threshold": settings.audio_snr_threshold,
+        # New per-request toggle (defaults to True to match current behavior).
+        "remove_dc_offset": True,
+    }
+
+    # Map overrides (API keys match AudioPreprocessor kwargs).
+    for k, v in preprocess_options.items():
+        if k in cfg:
+            cfg[k] = v
+
+    return AudioPreprocessor(**cfg)
+
+
+async def process_audio_file(
+    file: UploadFile,
+    *,
+    preprocess_options: Optional[Dict[str, Any]] = None,
+) -> AsyncGenerator[bytes, None]:
     """处理上传的音频文件，转换为 16kHz PCM"""
     suffix = Path(file.filename).suffix if file.filename else ".wav"
     temp_path = settings.uploads_dir / f"temp_{os.urandom(8).hex()}{suffix}"
@@ -54,10 +93,18 @@ async def process_audio_file(file: UploadFile) -> AsyncGenerator[bytes, None]:
                 .run(cmd=["ffmpeg", "-nostdin"], capture_stdout=True, capture_stderr=True)
             )
 
-            # 应用音频预处理
-            if (settings.audio_normalize_enable or settings.audio_trim_silence_enable or
-                settings.audio_denoise_enable or settings.audio_vocal_separate_enable):
-                preprocessor = get_audio_preprocessor()
+            # Apply audio preprocessing (request-scoped overrides supported).
+            preprocessor = _build_request_preprocessor(preprocess_options)
+
+            # If preprocessing is effectively disabled, skip extra float conversion.
+            should_process = (
+                getattr(preprocessor, "remove_dc_offset", True)
+                or preprocessor.normalize_enable
+                or preprocessor.trim_silence_enable
+                or preprocessor.denoise_enable
+                or preprocessor.vocal_separate_enable
+            )
+            if should_process:
                 audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 audio_array = preprocessor.process(audio_array, sample_rate=16000, validate=False)
                 audio_bytes = (audio_array * 32768.0).astype(np.int16).tobytes()

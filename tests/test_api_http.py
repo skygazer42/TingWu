@@ -37,17 +37,17 @@ def test_root_endpoint(client):
 
 def test_transcribe_endpoint(client):
     """测试转写接口"""
-    # Route uses `await transcription_engine.transcribe_async(...)`, so patch that
+    # Route uses `await transcription_engine.transcribe_auto_async(...)`, so patch that
     # symbol where it is imported/used (src.api.routes.transcribe).
-    with patch('src.api.routes.transcribe.transcription_engine.transcribe_async', new_callable=AsyncMock) as mock_transcribe_async, \
+    with patch('src.api.routes.transcribe.transcription_engine.transcribe_auto_async', new_callable=AsyncMock) as mock_transcribe_auto_async, \
          patch('src.api.routes.transcribe.process_audio_file') as mock_process:
-        mock_transcribe_async.return_value = {
+        mock_transcribe_auto_async.return_value = {
             "text": "你好世界",
             "sentences": [{"text": "你好世界", "start": 0, "end": 1000}],
             "raw_text": "你好世界"
         }
 
-        async def fake_process(file):
+        async def fake_process(file, preprocess_options=None):
             yield b"\x00" * 32000
         mock_process.side_effect = fake_process
 
@@ -63,16 +63,16 @@ def test_transcribe_endpoint(client):
 
 def test_transcribe_with_speaker(client):
     """测试带说话人的转写"""
-    with patch('src.api.routes.transcribe.transcription_engine.transcribe_async', new_callable=AsyncMock) as mock_transcribe_async, \
+    with patch('src.api.routes.transcribe.transcription_engine.transcribe_auto_async', new_callable=AsyncMock) as mock_transcribe_auto_async, \
          patch('src.api.routes.transcribe.process_audio_file') as mock_process:
-        mock_transcribe_async.return_value = {
+        mock_transcribe_auto_async.return_value = {
             "text": "你好",
             "sentences": [{"text": "你好", "start": 0, "end": 500, "speaker": "说话人甲", "speaker_id": 0}],
             "transcript": "[00:00 - 00:00] 说话人甲: 你好",
             "raw_text": "你好"
         }
 
-        async def fake_process(file):
+        async def fake_process(file, preprocess_options=None):
             yield b"\x00" * 16000
         mock_process.side_effect = fake_process
 
@@ -84,6 +84,74 @@ def test_transcribe_with_speaker(client):
         assert response.status_code == 200
         result = response.json()
         assert "transcript" in result
+
+
+def test_transcribe_asr_options_invalid_json(client):
+    with patch('src.api.routes.transcribe.transcription_engine.transcribe_auto_async', new_callable=AsyncMock) as mock_transcribe_auto_async, \
+         patch('src.api.routes.transcribe.process_audio_file') as mock_process:
+        async def fake_process(file, preprocess_options=None):
+            yield b"\x00" * 16000
+        mock_process.side_effect = fake_process
+
+        files = {"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")}
+        data = {"asr_options": "{not json"}
+
+        response = client.post("/api/v1/transcribe", files=files, data=data)
+        assert response.status_code == 400
+        assert "asr_options" in response.json().get("detail", "")
+
+        mock_process.assert_not_called()
+        mock_transcribe_auto_async.assert_not_awaited()
+
+
+def test_transcribe_asr_options_is_passed_to_engine(client):
+    with patch('src.api.routes.transcribe.transcription_engine.transcribe_auto_async', new_callable=AsyncMock) as mock_transcribe_auto_async, \
+         patch('src.api.routes.transcribe.process_audio_file') as mock_process:
+        mock_transcribe_auto_async.return_value = {
+            "text": "你好世界",
+            "sentences": [{"text": "你好世界", "start": 0, "end": 1000}],
+            "raw_text": "你好世界"
+        }
+
+        async def fake_process(file, preprocess_options=None):
+            yield b"\x00" * 32000
+        mock_process.side_effect = fake_process
+
+        files = {"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")}
+        asr_options = '{"chunking":{"max_workers":1,"overlap_chars":42}}'
+        data = {"asr_options": asr_options}
+
+        response = client.post("/api/v1/transcribe", files=files, data=data)
+        assert response.status_code == 200
+
+        mock_transcribe_auto_async.assert_awaited()
+        kwargs = mock_transcribe_auto_async.await_args.kwargs
+        assert kwargs["asr_options"] == {"chunking": {"max_workers": 1, "overlap_chars": 42}}
+
+
+def test_transcribe_asr_options_preprocess_is_passed_to_decoder(client):
+    with patch('src.api.routes.transcribe.transcription_engine.transcribe_auto_async', new_callable=AsyncMock) as mock_transcribe_auto_async, \
+         patch('src.api.routes.transcribe.process_audio_file') as mock_process:
+        mock_transcribe_auto_async.return_value = {
+            "text": "你好世界",
+            "sentences": [{"text": "你好世界", "start": 0, "end": 1000}],
+            "raw_text": "你好世界"
+        }
+
+        async def fake_process(file, preprocess_options=None):
+            assert preprocess_options == {"normalize_enable": False, "remove_dc_offset": False}
+            yield b"\x00" * 32000
+
+        mock_process.side_effect = fake_process
+
+        files = {"file": ("test.wav", io.BytesIO(b"fake"), "audio/wav")}
+        asr_options = '{"preprocess":{"normalize_enable":false,"remove_dc_offset":false}}'
+        data = {"asr_options": asr_options}
+
+        response = client.post("/api/v1/transcribe", files=files, data=data)
+        assert response.status_code == 200
+
+        mock_transcribe_auto_async.assert_awaited()
 
 def test_transcribe_no_file(client):
     """测试无文件上传"""

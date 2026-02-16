@@ -137,7 +137,7 @@ def _handle_url_transcribe(payload: dict) -> dict:
             audio_bytes = f.read()
 
         # 执行转写
-        result = transcription_engine.transcribe(
+        result = transcription_engine.transcribe_long_audio(
             audio_bytes,
             with_speaker=with_speaker,
             apply_hotword=apply_hotword

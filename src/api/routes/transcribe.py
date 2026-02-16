@@ -9,6 +9,7 @@ from src.api.schemas import (
     BatchTranscribeResponse, BatchTranscribeItem
 )
 from src.api.dependencies import process_audio_file
+from src.api.asr_options import parse_asr_options
 from src.core.engine import transcription_engine
 from src.utils.service_metrics import metrics
 
@@ -25,6 +26,7 @@ async def transcribe_audio(
     apply_llm: bool = Form(default=False, description="是否应用LLM润色"),
     llm_role: str = Form(default="default", description="LLM角色 (default/translator/code)"),
     hotwords: Optional[str] = Form(default=None, description="额外热词 (空格分隔)"),
+    asr_options: Optional[str] = Form(default=None, description="ASR options JSON (per-request tuning)"),
 ):
     """
     上传音频文件进行转写
@@ -36,15 +38,23 @@ async def transcribe_audio(
 
     metrics.increment_requests()
 
+    parsed_asr_options = None
     try:
-        async for audio_bytes in process_audio_file(file):
-            result = await transcription_engine.transcribe_async(
+        parsed_asr_options = parse_asr_options(asr_options)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        preprocess_options = (parsed_asr_options or {}).get("preprocess")
+        async for audio_bytes in process_audio_file(file, preprocess_options=preprocess_options):
+            result = await transcription_engine.transcribe_auto_async(
                 audio_bytes,
                 with_speaker=with_speaker,
                 apply_hotword=apply_hotword,
                 apply_llm=apply_llm,
                 llm_role=llm_role,
                 hotwords=hotwords,
+                asr_options=parsed_asr_options,
             )
 
             # 更新指标
@@ -74,6 +84,7 @@ async def transcribe_batch(
     apply_llm: bool = Form(default=False, description="是否应用LLM润色"),
     llm_role: str = Form(default="default", description="LLM角色"),
     hotwords: Optional[str] = Form(default=None, description="额外热词"),
+    asr_options: Optional[str] = Form(default=None, description="ASR options JSON (per-request tuning)"),
     max_concurrent: int = Form(default=3, description="最大并发数"),
 ):
     """
@@ -86,6 +97,12 @@ async def transcribe_batch(
 
     metrics.increment_requests()
 
+    parsed_asr_options = None
+    try:
+        parsed_asr_options = parse_asr_options(asr_options)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     results: List[BatchTranscribeItem] = []
     semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -93,14 +110,16 @@ async def transcribe_batch(
         """处理单个文件"""
         async with semaphore:
             try:
-                async for audio_bytes in process_audio_file(file):
-                    result = await transcription_engine.transcribe_async(
+                preprocess_options = (parsed_asr_options or {}).get("preprocess")
+                async for audio_bytes in process_audio_file(file, preprocess_options=preprocess_options):
+                    result = await transcription_engine.transcribe_auto_async(
                         audio_bytes,
                         with_speaker=with_speaker,
                         apply_hotword=apply_hotword,
                         apply_llm=apply_llm,
                         llm_role=llm_role,
                         hotwords=hotwords,
+                        asr_options=parsed_asr_options,
                     )
 
                     # 更新指标

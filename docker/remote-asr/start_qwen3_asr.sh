@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_ID="${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-0.6B}"
+MODEL_ID="${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-1.7B}"
 PORT="${PORT:-8000}"
 GPU_MEM_UTIL="${GPU_MEMORY_UTILIZATION:-0.85}"
 
@@ -14,4 +14,3 @@ exec qwen-asr-serve "${MODEL_ID}" \
   --port "${PORT}" \
   --gpu-memory-utilization "${GPU_MEM_UTIL}" \
   --trust-remote-code
-

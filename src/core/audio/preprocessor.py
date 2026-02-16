@@ -47,6 +47,7 @@ class AudioPreprocessor:
         device: str = "cpu",
         adaptive_enable: bool = False,
         snr_threshold: float = 20.0,
+        remove_dc_offset: bool = True,
     ):
         """
         初始化预处理器
@@ -65,6 +66,7 @@ class AudioPreprocessor:
             device: 设备 ("cpu" 或 "cuda")
             adaptive_enable: 是否启用自适应预处理
             snr_threshold: SNR 阈值 (低于此值启用降噪)
+            remove_dc_offset: 是否移除 DC offset (均值偏移)
         """
         self.target_db = target_db
         self.silence_threshold_db = silence_threshold_db
@@ -79,6 +81,7 @@ class AudioPreprocessor:
         self.device = device
         self.adaptive_enable = adaptive_enable
         self.snr_threshold = snr_threshold
+        self.remove_dc_offset = remove_dc_offset
 
         # 预计算阈值
         self.target_rms = self._db_to_amplitude(target_db)
@@ -428,6 +431,10 @@ class AudioPreprocessor:
             if not is_valid:
                 raise ValueError(f"音频验证失败: {error}")
 
+        # 0. Remove DC offset (helps ASR stability on some recordings).
+        if self.remove_dc_offset and len(audio) > 0:
+            audio = audio - float(np.mean(audio))
+
         # 自适应预处理：根据 SNR 决定是否需要降噪
         should_denoise = self.denoise_enable
         should_trim = self.trim_silence_enable
@@ -483,11 +490,18 @@ class AudioPreprocessor:
                 'sample_rate': sample_rate,
                 'rms_db': float('-inf'),
                 'peak_db': float('-inf'),
+                'dc_offset': 0.0,
+                'clipping_ratio': 0.0,
             }
 
         duration = len(audio) / sample_rate
         rms = self.get_rms(audio)
         peak = np.max(np.abs(audio))
+        dc_offset = float(np.mean(audio))
+
+        # Best-effort clipping detection for float waveforms in [-1, 1].
+        clip_threshold = 0.999
+        clipping_ratio = float(np.mean(np.abs(audio) >= clip_threshold))
 
         return {
             'duration': duration,
@@ -495,6 +509,8 @@ class AudioPreprocessor:
             'sample_rate': sample_rate,
             'rms_db': self._amplitude_to_db(rms),
             'peak_db': self._amplitude_to_db(peak),
+            'dc_offset': dc_offset,
+            'clipping_ratio': clipping_ratio,
         }
 
 

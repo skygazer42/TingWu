@@ -1,0 +1,298 @@
+version: "3.8"
+
+# Multi-model deployment: each model/backend runs as its own TingWu container,
+# exposing the same TingWu HTTP API on a different host port.
+#
+# This file is designed for *on-demand* startup via Compose profiles:
+#   docker compose -f docker-compose.models.yml --profile pytorch up -d
+#   docker compose -f docker-compose.models.yml --profile onnx up -d
+#
+# Or explicitly target a service (Compose will run it even if profiled):
+#   docker compose -f docker-compose.models.yml up -d tingwu-pytorch
+#
+# Tip: use only one GPU-heavy profile at a time unless you have multiple GPUs/VRAM.
+
+x-proxy-env: &proxy-env
+  # Optional proxy passthrough for model downloads inside containers.
+  # On macOS/Windows Docker Desktop, host loopback is usually `host.docker.internal`, not 127.0.0.1.
+  HTTP_PROXY: ${HTTP_PROXY:-}
+  HTTPS_PROXY: ${HTTPS_PROXY:-}
+  ALL_PROXY: ${ALL_PROXY:-}
+  NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
+  http_proxy: ${http_proxy:-}
+  https_proxy: ${https_proxy:-}
+  all_proxy: ${all_proxy:-}
+  no_proxy: ${no_proxy:-localhost,127.0.0.1,::1}
+
+x-tingwu-env: &tingwu-env
+  <<: *proxy-env
+  DEBUG: ${DEBUG:-false}
+  HOTWORDS_THRESHOLD: ${HOTWORDS_THRESHOLD:-0.85}
+
+  # Default runtime settings (can be overridden per-service).
+  DEVICE: ${DEVICE:-cuda}
+  NGPU: ${NGPU:-1}
+  NCPU: ${NCPU:-4}
+
+x-tingwu-volumes: &tingwu-volumes
+  - ./data:/app/data
+  - model-cache:/root/.cache/modelscope
+  - huggingface-cache:/root/.cache/huggingface
+
+x-tingwu-logging: &tingwu-logging
+  driver: "json-file"
+  options:
+    max-size: "100m"
+    max-file: "3"
+
+x-tingwu-base: &tingwu-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: tingwu-speech-service:latest
+  volumes: *tingwu-volumes
+  restart: unless-stopped
+  logging: *tingwu-logging
+
+services:
+  # ======================
+  # Local (in-process) ASR
+  # ======================
+  tingwu-pytorch:
+    <<: *tingwu-base
+    profiles: ["pytorch"]
+    container_name: tingwu-pytorch
+    ports:
+      - "${PORT_PYTORCH:-8101}:8000"
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: pytorch
+      DEVICE: ${PYTORCH_DEVICE:-cuda}
+      NGPU: ${PYTORCH_NGPU:-1}
+      NCPU: ${PYTORCH_NCPU:-4}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  tingwu-onnx:
+    # ONNX backend uses a dedicated Dockerfile with extra runtime deps.
+    build:
+      context: .
+      dockerfile: Dockerfile.onnx
+    image: tingwu-speech-service:onnx
+    profiles: ["onnx"]
+    container_name: tingwu-onnx
+    ports:
+      - "${PORT_ONNX:-8102}:8000"
+    volumes:
+      - ./data:/app/data
+      - model-cache:/root/.cache/modelscope
+      - huggingface-cache:/root/.cache/huggingface
+      - onnx-cache:/root/.cache/funasr_onnx
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: onnx
+      DEVICE: ${ONNX_DEVICE:-cpu}
+      NGPU: ${ONNX_NGPU:-0}
+      NCPU: ${ONNX_NCPU:-8}
+      OMP_NUM_THREADS: ${ONNX_NCPU:-8}
+      MKL_NUM_THREADS: ${ONNX_NCPU:-8}
+    restart: unless-stopped
+    logging: *tingwu-logging
+
+  tingwu-sensevoice:
+    <<: *tingwu-base
+    profiles: ["sensevoice"]
+    container_name: tingwu-sensevoice
+    ports:
+      - "${PORT_SENSEVOICE:-8103}:8000"
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: sensevoice
+      DEVICE: ${SENSEVOICE_DEVICE:-cuda}
+      NGPU: ${SENSEVOICE_NGPU:-1}
+      NCPU: ${SENSEVOICE_NCPU:-4}
+      SENSEVOICE_MODEL: ${SENSEVOICE_MODEL:-iic/SenseVoiceSmall}
+      SENSEVOICE_LANGUAGE: ${SENSEVOICE_LANGUAGE:-zh}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  tingwu-gguf:
+    # GGUF backend requires extra Python deps (onnxruntime + gguf) and
+    # model artifacts under ./data/models. See README for expected files.
+    build:
+      context: .
+      dockerfile: Dockerfile.gguf
+    image: tingwu-speech-service:gguf
+    profiles: ["gguf"]
+    container_name: tingwu-gguf
+    ports:
+      - "${PORT_GGUF:-8104}:8000"
+    volumes: *tingwu-volumes
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: gguf
+      DEVICE: ${GGUF_DEVICE:-cpu}
+      NGPU: ${GGUF_NGPU:-0}
+      NCPU: ${GGUF_NCPU:-8}
+      GGUF_ENCODER_PATH: ${GGUF_ENCODER_PATH:-/app/data/models/Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx}
+      GGUF_CTC_PATH: ${GGUF_CTC_PATH:-/app/data/models/Fun-ASR-Nano-CTC.int8.onnx}
+      GGUF_DECODER_PATH: ${GGUF_DECODER_PATH:-/app/data/models/Fun-ASR-Nano-Decoder.q8_0.gguf}
+      GGUF_TOKENS_PATH: ${GGUF_TOKENS_PATH:-/app/data/models/tokens.txt}
+      GGUF_LIB_DIR: ${GGUF_LIB_DIR:-/app/data/models/bin}
+
+  # ==========================
+  # Remote ASR (OpenAI-style)
+  # ==========================
+  # These two services run the remote ASR servers. They are optional and only
+  # started when enabling their profiles. TingWu wrappers below expose a unified
+  # TingWu API for each model.
+  qwen3-asr:
+    image: qwenllm/qwen3-asr:latest
+    profiles: ["qwen3", "router"]
+    container_name: qwen3-asr
+    # Expose for debugging (TingWu talks via the docker network name).
+    ports:
+      - "${PORT_QWEN3_ASR:-9001}:8000"
+    ipc: host
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - ./docker/remote-asr/start_qwen3_asr.sh:/start_qwen3_asr.sh:ro
+    command:
+      [
+        "bash",
+        "-lc",
+        "tr -d '\\r' < /start_qwen3_asr.sh > /tmp/start_qwen3_asr.sh && chmod +x /tmp/start_qwen3_asr.sh && bash /tmp/start_qwen3_asr.sh",
+      ]
+    shm_size: "4gb"
+    environment:
+      <<: *proxy-env
+      QWEN3_MODEL_ID: ${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-1.7B}
+      PORT: 8000
+      GPU_MEMORY_UTILIZATION: ${QWEN3_GPU_MEMORY_UTILIZATION:-0.85}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  vibevoice-asr:
+    image: vllm/vllm-openai:latest
+    profiles: ["vibevoice", "router"]
+    container_name: vibevoice-asr
+    ports:
+      - "${PORT_VIBEVOICE_ASR:-9002}:8000"
+    ipc: host
+    volumes:
+      # Mount a local VibeVoice repo directory that contains vllm_plugin + python package.
+      # Required only if you start the vibevoice/router profiles.
+      - ${VIBEVOICE_REPO_PATH:-./VibeVoice}:/app
+      - huggingface-cache:/root/.cache/huggingface
+      - ./docker/remote-asr/start_vibevoice_asr.sh:/start_vibevoice_asr.sh:ro
+    entrypoint: ["bash", "-lc"]
+    command:
+      [
+        "tr -d '\\r' < /start_vibevoice_asr.sh > /tmp/start_vibevoice_asr.sh && chmod +x /tmp/start_vibevoice_asr.sh && bash /tmp/start_vibevoice_asr.sh",
+      ]
+    shm_size: "4gb"
+    environment:
+      <<: *proxy-env
+      VIBEVOICE_MODEL_ID: ${VIBEVOICE_MODEL_ID:-microsoft/VibeVoice-ASR}
+      PORT: 8000
+      SERVED_MODEL_NAME: ${VIBEVOICE_SERVED_MODEL_NAME:-vibevoice}
+      DTYPE: ${VIBEVOICE_DTYPE:-float16}
+      MAX_MODEL_LEN: ${VIBEVOICE_MAX_MODEL_LEN:-16384}
+      MAX_NUM_SEQS: ${VIBEVOICE_MAX_NUM_SEQS:-2}
+      MAX_NUM_BATCHED_TOKENS: ${VIBEVOICE_MAX_NUM_BATCHED_TOKENS:-4096}
+      GPU_MEMORY_UTILIZATION: ${VIBEVOICE_GPU_MEMORY_UTILIZATION:-0.90}
+      VIBEVOICE_FFMPEG_MAX_CONCURRENCY: ${VIBEVOICE_FFMPEG_MAX_CONCURRENCY:-16}
+      PYTORCH_ALLOC_CONF: expandable_segments:True
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  tingwu-qwen3:
+    <<: *tingwu-base
+    profiles: ["qwen3"]
+    container_name: tingwu-qwen3
+    ports:
+      - "${PORT_TINGWU_QWEN3:-8201}:8000"
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: qwen3
+      DEVICE: ${QWEN3_WRAPPER_DEVICE:-cpu}
+      NGPU: ${QWEN3_WRAPPER_NGPU:-0}
+      NCPU: ${QWEN3_WRAPPER_NCPU:-4}
+      QWEN3_ASR_BASE_URL: http://qwen3-asr:8000
+      QWEN3_ASR_MODEL: ${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-1.7B}
+      QWEN3_ASR_API_KEY: ${QWEN3_ASR_API_KEY:-EMPTY}
+      QWEN3_ASR_TIMEOUT_S: ${QWEN3_ASR_TIMEOUT_S:-60}
+    depends_on:
+      - qwen3-asr
+
+  tingwu-vibevoice:
+    <<: *tingwu-base
+    profiles: ["vibevoice"]
+    container_name: tingwu-vibevoice
+    ports:
+      - "${PORT_TINGWU_VIBEVOICE:-8202}:8000"
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: vibevoice
+      DEVICE: ${VIBEVOICE_WRAPPER_DEVICE:-cpu}
+      NGPU: ${VIBEVOICE_WRAPPER_NGPU:-0}
+      NCPU: ${VIBEVOICE_WRAPPER_NCPU:-4}
+      VIBEVOICE_ASR_BASE_URL: http://vibevoice-asr:8000
+      VIBEVOICE_ASR_MODEL: ${VIBEVOICE_SERVED_MODEL_NAME:-vibevoice}
+      VIBEVOICE_ASR_API_KEY: ${VIBEVOICE_ASR_API_KEY:-EMPTY}
+      VIBEVOICE_ASR_TIMEOUT_S: ${VIBEVOICE_ASR_TIMEOUT_S:-600}
+      VIBEVOICE_ASR_USE_CHAT_COMPLETIONS_FALLBACK: ${VIBEVOICE_ASR_USE_CHAT_COMPLETIONS_FALLBACK:-true}
+    depends_on:
+      - vibevoice-asr
+
+  tingwu-router:
+    <<: *tingwu-base
+    profiles: ["router"]
+    container_name: tingwu-router
+    ports:
+      - "${PORT_TINGWU_ROUTER:-8200}:8000"
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: router
+      DEVICE: ${ROUTER_DEVICE:-cpu}
+      NGPU: ${ROUTER_NGPU:-0}
+      NCPU: ${ROUTER_NCPU:-4}
+      QWEN3_ASR_BASE_URL: http://qwen3-asr:8000
+      QWEN3_ASR_MODEL: ${QWEN3_MODEL_ID:-Qwen/Qwen3-ASR-1.7B}
+      VIBEVOICE_ASR_BASE_URL: http://vibevoice-asr:8000
+      VIBEVOICE_ASR_MODEL: ${VIBEVOICE_SERVED_MODEL_NAME:-vibevoice}
+      VIBEVOICE_ASR_USE_CHAT_COMPLETIONS_FALLBACK: ${VIBEVOICE_ASR_USE_CHAT_COMPLETIONS_FALLBACK:-true}
+      ROUTER_SHORT_BACKEND: qwen3
+      ROUTER_LONG_BACKEND: vibevoice
+      ROUTER_LONG_AUDIO_THRESHOLD_S: ${ROUTER_LONG_AUDIO_THRESHOLD_S:-60}
+      ROUTER_FORCE_VIBEVOICE_WHEN_WITH_SPEAKER: ${ROUTER_FORCE_VIBEVOICE_WHEN_WITH_SPEAKER:-true}
+    depends_on:
+      - qwen3-asr
+      - vibevoice-asr
+
+volumes:
+  model-cache:
+  huggingface-cache:
+  onnx-cache:

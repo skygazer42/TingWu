@@ -54,6 +54,69 @@ docker-compose up -d
 | **SenseVoice 模型** | `docker-compose -f docker-compose.sensevoice.yml up -d` | ~500MB |
 | **ONNX 后端** | `docker-compose -f docker-compose.onnx.yml up -d` | ~400MB |
 
+#### 多模型按需启动（每个模型=一个容器，一个统一 API）
+
+如果你希望**每个模型/后端单独一个容器**，并且都提供同一套 TingWu API（`/api/v1/transcribe`），可以使用：`docker-compose.models.yml`。
+
+特点：
+- 端口不同，但 API 路径一致，方便做 A/B 对比和基准测试
+- 默认不启动任何模型，按需用 profile 启动
+
+示例（按需启动）：
+
+```bash
+# 1) PyTorch Paraformer (GPU) -> http://localhost:8101
+docker compose -f docker-compose.models.yml --profile pytorch up -d
+
+# 2) ONNX (CPU) -> http://localhost:8102
+docker compose -f docker-compose.models.yml --profile onnx up -d
+
+# 3) SenseVoice (GPU) -> http://localhost:8103
+docker compose -f docker-compose.models.yml --profile sensevoice up -d
+
+# 4) Qwen3-ASR (远程模型容器 + TingWu 包装) -> http://localhost:8201
+docker compose -f docker-compose.models.yml --profile qwen3 up -d
+
+# 5) VibeVoice-ASR (远程模型容器 + TingWu 包装) -> http://localhost:8202
+# 需要提供本地 VibeVoice 仓库路径（包含 vllm_plugin）
+VIBEVOICE_REPO_PATH=/path/to/VibeVoice \
+  docker compose -f docker-compose.models.yml --profile vibevoice up -d
+
+# 6) Router (Qwen3 + VibeVoice 自动路由) -> http://localhost:8200
+VIBEVOICE_REPO_PATH=/path/to/VibeVoice \
+  docker compose -f docker-compose.models.yml --profile router up -d
+```
+
+停止：
+
+```bash
+docker compose -f docker-compose.models.yml down
+```
+
+#### 请求级调参（`asr_options`，用于准确率 A/B）
+
+在 `POST /api/v1/transcribe`（以及 batch）里可以额外传一个表单字段 `asr_options`（JSON 字符串），用于**单次请求**调参：
+- `preprocess`：音频预处理（normalize/denoise/trim/DC offset）
+- `chunking`：长音频分块参数（chunk 时长/重叠/合并 overlap_chars/线程数）
+- `backend`：模型后端参数（不同后端支持的参数不同）
+- `postprocess`：文本后处理（ITN/标点/spacing 等）
+
+示例：强制更小的 chunk + 更激进的合并窗口（更偏准确率，慢一点）
+
+```bash
+curl -X POST "http://localhost:8102/api/v1/transcribe" \
+  -F "file=@/path/to/audio.wav" \
+  -F 'asr_options={"chunking":{"max_chunk_duration_s":30,"overlap_chars":40,"max_workers":1}}'
+```
+
+示例：单次请求关闭音量归一化 + DC offset（用于排查“预处理是否伤准确率”）
+
+```bash
+curl -X POST "http://localhost:8101/api/v1/transcribe" \
+  -F "file=@/path/to/audio.wav" \
+  -F 'asr_options={"preprocess":{"normalize_enable":false,"remove_dc_offset":false}}'
+```
+
 #### 模型缓存
 
 模型存储在 Docker Volume 中，可查看下载状态：

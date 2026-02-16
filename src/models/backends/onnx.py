@@ -215,6 +215,31 @@ class ONNXBackend(ASRBackend):
         if hotwords:
             logger.debug("ONNX backend: hotwords will be processed via post-processing pipeline")
 
+        # TingWu's API standardizes uploads to raw PCM16LE (16kHz, mono) bytes.
+        # funasr-onnx Paraformer expects a float32 waveform, so convert when needed.
+        if isinstance(audio_input, (bytes, bytearray)):
+            from src.core.audio.pcm import (
+                is_wav_bytes,
+                pcm16le_bytes_to_float32,
+                wav_bytes_to_float32,
+            )
+
+            data = bytes(audio_input)
+            if is_wav_bytes(data):
+                audio, sr = wav_bytes_to_float32(data)
+                if sr != 16000:
+                    try:
+                        import librosa
+
+                        audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+                    except Exception as e:
+                        raise ValueError(
+                            f"Unsupported WAV sample_rate={sr}, expected 16000"
+                        ) from e
+                audio_input = audio
+            else:
+                audio_input = pcm16le_bytes_to_float32(data)
+
         try:
             # 直接对完整音频进行 ASR
             # funasr_onnx Paraformer 返回: [{'preds': ('text', [chars])}]

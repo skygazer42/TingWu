@@ -1,0 +1,60 @@
+# GGUF 后端 Dockerfile
+# 用于 TingWu 的 gguf ASR 后端 (src/models/backends/gguf)。
+#
+# 说明:
+# - GGUF 后端需要额外依赖: onnxruntime + gguf
+# - 还需要你把模型文件和 llama.cpp 动态库放到 ./data/models (并挂载到容器 /app/data/models)
+# - 该镜像以 API 为主，不强制构建前端（可按需加上 frontend-builder 阶段）
+
+FROM python:3.10-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+# 安装基础依赖
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# 安装 GGUF/ONNX 相关依赖
+RUN pip install --no-cache-dir --prefix=/install \
+    onnxruntime>=1.16.0 \
+    gguf>=0.10.0
+
+FROM python:3.10-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    # 默认使用 gguf 后端
+    ASR_BACKEND=gguf \
+    DEVICE=cpu
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    # onnxruntime 可能需要的库
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
+
+COPY src/ ./src/
+COPY configs/ ./configs/
+COPY data/hotwords/ ./data/hotwords/
+
+RUN mkdir -p data/models data/uploads data/outputs
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
