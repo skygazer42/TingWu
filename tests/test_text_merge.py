@@ -34,3 +34,16 @@ def test_merge_by_text_handles_punctuation_boundaries():
 def test_merge_by_text_fallback_concat_when_no_overlap():
     assert _merge_by_text("你好", "世界", overlap_chars=20, error_tolerance=0) == "你好世界"
 
+
+def test_merge_by_text_ignores_whitespace_only_new_text():
+    assert _merge_by_text("你好世界", "   \n\t  ", overlap_chars=20, error_tolerance=0) == "你好世界"
+
+
+def test_merge_by_text_dedupes_boundary_whitespace_on_concat():
+    assert _merge_by_text("hello ", " world", overlap_chars=20, error_tolerance=0) == "hello world"
+    assert _merge_by_text("hello\n", "\nworld", overlap_chars=20, error_tolerance=0) == "hello\nworld"
+
+
+def test_merge_by_text_empty_inputs():
+    assert _merge_by_text("", "世界", overlap_chars=20, error_tolerance=0) == "世界"
+    assert _merge_by_text("你好", "", overlap_chars=20, error_tolerance=0) == "你好"

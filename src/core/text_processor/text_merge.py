@@ -66,6 +66,9 @@ def merge_by_text(
         return new_text
     if not new_text:
         return prev_text
+    if str(new_text).strip() == "":
+        # Guard: whitespace-only chunks should not pollute output.
+        return prev_text
 
     # 1) Prepare matching views: strip trailing punctuation from prev, and leading punctuation from new.
     prev_clean = prev_text.rstrip(_PUNCTUATION_ALL)
@@ -76,6 +79,8 @@ def merge_by_text(
     new_clean = new_text[new_match_start:]
 
     if not prev_clean or not new_clean:
+        if prev_text[-1].isspace() and new_text[0].isspace():
+            return prev_text + new_text.lstrip()
         return prev_text + new_text
 
     # 2) Define search window on prev tail.
@@ -143,5 +148,6 @@ def merge_by_text(
         return res_prev + res_new
 
     logger.debug("merge_by_text: no overlap found, concatenating")
+    if prev_text[-1].isspace() and new_text[0].isspace():
+        return prev_text + new_text.lstrip()
     return prev_text + new_text
-
