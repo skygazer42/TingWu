@@ -26,6 +26,7 @@ ENV/
 .agents/
 .codex/
 .claude/
+.beads/
 
 # Data
 data/uploads/*
