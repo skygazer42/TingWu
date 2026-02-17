@@ -129,6 +129,29 @@ services:
               count: 1
               capabilities: [gpu]
 
+  tingwu-whisper:
+    <<: *tingwu-base
+    profiles: ["whisper"]
+    container_name: tingwu-whisper
+    ports:
+      - "${PORT_WHISPER:-8105}:8000"
+    environment:
+      <<: *tingwu-env
+      ASR_BACKEND: whisper
+      DEVICE: ${WHISPER_DEVICE:-cuda}
+      NGPU: ${WHISPER_NGPU:-1}
+      NCPU: ${WHISPER_NCPU:-4}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-zh}
+      WHISPER_DOWNLOAD_ROOT: ${WHISPER_DOWNLOAD_ROOT:-/app/data/models/whisper}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   tingwu-gguf:
     # GGUF backend requires extra Python deps (onnxruntime + gguf) and
     # model artifacts under ./data/models. See README for expected files.

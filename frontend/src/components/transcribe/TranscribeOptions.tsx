@@ -21,6 +21,7 @@ const PRESET_BACKENDS: Array<{ label: string; value: string; baseUrl: string }> 
   { label: 'ONNX (8102)', value: 'http://localhost:8102', baseUrl: 'http://localhost:8102' },
   { label: 'SenseVoice (8103)', value: 'http://localhost:8103', baseUrl: 'http://localhost:8103' },
   { label: 'GGUF (8104)', value: 'http://localhost:8104', baseUrl: 'http://localhost:8104' },
+  { label: 'Whisper (8105)', value: 'http://localhost:8105', baseUrl: 'http://localhost:8105' },
   { label: 'Qwen3 (8201)', value: 'http://localhost:8201', baseUrl: 'http://localhost:8201' },
   { label: 'VibeVoice (8202)', value: 'http://localhost:8202', baseUrl: 'http://localhost:8202' },
   { label: 'Router (8200)', value: 'http://localhost:8200', baseUrl: 'http://localhost:8200' },

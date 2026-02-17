@@ -74,15 +74,18 @@ docker compose -f docker-compose.models.yml --profile onnx up -d
 # 3) SenseVoice (GPU) -> http://localhost:8103
 docker compose -f docker-compose.models.yml --profile sensevoice up -d
 
-# 4) Qwen3-ASR (远程模型容器 + TingWu 包装) -> http://localhost:8201
+# 4) Whisper (GPU) -> http://localhost:8105
+docker compose -f docker-compose.models.yml --profile whisper up -d
+
+# 5) Qwen3-ASR (远程模型容器 + TingWu 包装) -> http://localhost:8201
 docker compose -f docker-compose.models.yml --profile qwen3 up -d
 
-# 5) VibeVoice-ASR (远程模型容器 + TingWu 包装) -> http://localhost:8202
+# 6) VibeVoice-ASR (远程模型容器 + TingWu 包装) -> http://localhost:8202
 # 需要提供本地 VibeVoice 仓库路径（包含 vllm_plugin）
 VIBEVOICE_REPO_PATH=/path/to/VibeVoice \
   docker compose -f docker-compose.models.yml --profile vibevoice up -d
 
-# 6) Router (Qwen3 + VibeVoice 自动路由) -> http://localhost:8200
+# 7) Router (Qwen3 + VibeVoice 自动路由) -> http://localhost:8200
 VIBEVOICE_REPO_PATH=/path/to/VibeVoice \
   docker compose -f docker-compose.models.yml --profile router up -d
 ```
@@ -415,7 +418,7 @@ curl -X POST http://localhost:8000/config/reload
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| ASR_BACKEND | ASR 后端 (pytorch/onnx/sensevoice/gguf/qwen3/vibevoice/router) | pytorch |
+| ASR_BACKEND | ASR 后端 (pytorch/onnx/sensevoice/gguf/qwen3/vibevoice/router/whisper) | pytorch |
 | ASR_MODEL | 离线 ASR 模型 | paraformer-zh |
 | VAD_MODEL | VAD 模型 | fsmn-vad |
 | PUNC_MODEL | 标点模型 | ct-punc-c |

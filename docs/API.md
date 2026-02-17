@@ -400,6 +400,9 @@ POST /api/v1/asr
 Content-Type: multipart/form-data
 ```
 
+> 说明：该接口仅保证**返回格式**兼容 Whisper ASR WebService。
+> 实际使用的模型/后端由当前 TingWu 服务实例的 `ASR_BACKEND` 决定（可通过 `GET /api/v1/backend` 探测）。
+
 **请求参数**:
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
@@ -416,17 +419,17 @@ Content-Type: multipart/form-data
   "text": "完整转写文本",
   "segments": [
     {
-      "id": 0,
+      "sentence_index": 1,
       "text": "第一句话",
-      "start": 0.0,
-      "end": 2.5,
+      "start": "00:00:00,000",
+      "end": "00:00:02,500",
       "speaker": "speaker_0"
     },
     {
-      "id": 1,
+      "sentence_index": 2,
       "text": "第二句话",
-      "start": 2.6,
-      "end": 5.0,
+      "start": "00:00:02,600",
+      "end": "00:00:05,000",
       "speaker": "speaker_1"
     }
   ],
