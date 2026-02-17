@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import { AudioWaveform, VolumeLevel, RecordingTimer } from '@/components/audio'
 import { StreamingText, ModeSelector } from '@/components/realtime'
 import { ConnectionStatus as ConnectionStatusComponent } from '@/components/realtime/ConnectionStatus'
 import { useWebSocket, useAudioRecorder } from '@/hooks'
+import { useBackendStore } from '@/stores'
 import type { WSMessage, WSResultMessage } from '@/lib/api/types'
 
 type RealtimeMode = '2pass' | 'online' | 'offline'
@@ -22,7 +23,23 @@ export default function RealtimePage() {
   const [segments, setSegments] = useState<TextSegment[]>([])
   const [copied, setCopied] = useState(false)
 
-  const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/realtime`
+  const { baseUrl } = useBackendStore()
+
+  const wsUrl = useMemo(() => {
+    if (!baseUrl) {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${proto}//${window.location.host}/ws/realtime`
+    }
+
+    try {
+      const u = new URL(baseUrl)
+      const proto = u.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${proto}//${u.host}/ws/realtime`
+    } catch {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${proto}//${window.location.host}/ws/realtime`
+    }
+  }, [baseUrl])
 
   // WebSocket 处理
   const handleMessage = useCallback((message: WSMessage) => {

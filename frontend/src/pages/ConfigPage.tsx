@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Loader2, RefreshCw, Save } from 'lucide-react'
 import { getAllConfig, updateConfig, reloadEngine } from '@/lib/api'
-import { useConfigStore } from '@/stores'
+import { useBackendStore, useConfigStore } from '@/stores'
 import { ConfigPresets } from '@/components/config/ConfigPresets'
 
 // 配置项定义
@@ -95,10 +95,11 @@ const AUDIO_CONFIGS: ConfigItemDef[] = [
 export default function ConfigPage() {
   const queryClient = useQueryClient()
   const { serverConfig, setServerConfig, pendingChanges, setPendingChange, clearPendingChanges } = useConfigStore()
+  const { baseUrl } = useBackendStore()
 
   // 获取配置
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['config'],
+    queryKey: ['config', baseUrl],
     queryFn: getAllConfig,
   })
 

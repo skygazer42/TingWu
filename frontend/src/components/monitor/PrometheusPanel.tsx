@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "@/lib/toast"
+import { useBackendStore } from "@/stores"
 
 export interface PrometheusPanelProps extends React.HTMLAttributes<HTMLDivElement> {
   /** Prometheus 端点 URL */
@@ -17,12 +18,14 @@ export interface PrometheusPanelProps extends React.HTMLAttributes<HTMLDivElemen
   isLoading?: boolean
 }
 
-const PROMETHEUS_CONFIG = `scrape_configs:
+function buildPrometheusConfig(target: string) {
+  return `scrape_configs:
   - job_name: 'tingwu'
     scrape_interval: 15s
     static_configs:
-      - targets: ['localhost:8000']
+      - targets: ['${target}']
     metrics_path: '/metrics/prometheus'`
+}
 
 const GRAFANA_DASHBOARD = {
   dashboard: {
@@ -31,17 +34,17 @@ const GRAFANA_DASHBOARD = {
       {
         title: "Total Requests",
         type: "stat",
-        targets: [{ expr: 'tingwu_total_requests' }],
+        targets: [{ expr: 'tingwu_requests_total' }],
       },
       {
         title: "Success Rate",
         type: "gauge",
-        targets: [{ expr: 'tingwu_successful_requests / tingwu_total_requests * 100' }],
+        targets: [{ expr: 'tingwu_requests_successful_total / tingwu_requests_total * 100' }],
       },
       {
         title: "Average RTF",
         type: "timeseries",
-        targets: [{ expr: 'tingwu_avg_rtf' }],
+        targets: [{ expr: 'tingwu_rtf_avg' }],
       },
     ],
   },
@@ -54,7 +57,30 @@ function PrometheusPanel({
   isLoading = false,
   ...props
 }: PrometheusPanelProps) {
-  const fullEndpoint = `${window.location.origin}${endpoint}`
+  const { baseUrl } = useBackendStore()
+
+  const prometheusTarget = React.useMemo(() => {
+    if (!baseUrl) {
+      return window.location.host
+    }
+    try {
+      return new URL(baseUrl).host
+    } catch {
+      return window.location.host
+    }
+  }, [baseUrl])
+
+  const prometheusConfig = React.useMemo(() => {
+    return buildPrometheusConfig(prometheusTarget)
+  }, [prometheusTarget])
+
+  const fullEndpoint = React.useMemo(() => {
+    const path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`
+    if (!baseUrl) {
+      return `${window.location.origin}${path}`
+    }
+    return `${baseUrl}${path}`
+  }, [baseUrl, endpoint])
 
   const handleCopyEndpoint = () => {
     navigator.clipboard.writeText(fullEndpoint)
@@ -62,7 +88,7 @@ function PrometheusPanel({
   }
 
   const handleCopyConfig = () => {
-    navigator.clipboard.writeText(PROMETHEUS_CONFIG)
+    navigator.clipboard.writeText(prometheusConfig)
     toast.success('Prometheus 配置已复制')
   }
 
@@ -129,7 +155,7 @@ function PrometheusPanel({
             </Button>
           </div>
           <pre className="p-3 rounded-lg bg-muted text-xs font-mono overflow-x-auto">
-            {PROMETHEUS_CONFIG}
+            {prometheusConfig}
           </pre>
         </div>
 

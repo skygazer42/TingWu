@@ -6,18 +6,21 @@ import { Loader2, RefreshCw, Activity, Clock, CheckCircle, Zap, Database } from 
 import { checkHealth, getMetrics } from '@/lib/api'
 import { ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import { PrometheusPanel } from '@/components/monitor/PrometheusPanel'
+import { useBackendStore } from '@/stores'
 
 export default function MonitorPage() {
+  const { baseUrl } = useBackendStore()
+
   // 健康检查
   const healthQuery = useQuery({
-    queryKey: ['health'],
+    queryKey: ['health', baseUrl],
     queryFn: checkHealth,
     refetchInterval: 30000, // 30 秒刷新
   })
 
   // 指标
   const metricsQuery = useQuery({
-    queryKey: ['metrics'],
+    queryKey: ['metrics', baseUrl],
     queryFn: getMetrics,
     refetchInterval: 10000, // 10 秒刷新
   })

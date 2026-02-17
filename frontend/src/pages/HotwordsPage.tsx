@@ -8,16 +8,18 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Loader2, RefreshCw, Plus, Upload, Search } from 'lucide-react'
 import { getHotwords, updateHotwords, appendHotwords, reloadHotwords } from '@/lib/api'
+import { useBackendStore } from '@/stores'
 
 export default function HotwordsPage() {
   const queryClient = useQueryClient()
+  const { baseUrl } = useBackendStore()
   const [draftText, setDraftText] = useState('')
   const [isDirty, setIsDirty] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
 
   // 获取热词列表
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['hotwords'],
+    queryKey: ['hotwords', baseUrl],
     queryFn: getHotwords,
   })
 
