@@ -118,7 +118,15 @@ export interface BackendCapabilities {
   supports_speaker: boolean
   supports_streaming: boolean
   supports_hotwords: boolean
-  supports_speaker_fallback?: boolean
+  supports_speaker_fallback: boolean
+  supports_speaker_external: boolean
+  speaker_strategy:
+    | 'external'
+    | 'native'
+    | 'fallback_diarization'
+    | 'fallback_backend'
+    | 'ignore'
+    | 'error'
 }
 
 export interface BackendInfoResponse {

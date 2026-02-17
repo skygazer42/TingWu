@@ -80,6 +80,21 @@ class BackendCapabilities(BaseModel):
         default=False,
         description="是否启用/可用说话人 fallback（当后端原生不支持 speaker 时，通过辅助服务生成说话人段落）",
     )
+    supports_speaker_external: bool = Field(
+        default=False,
+        description="是否启用/可用 external diarizer（外部说话人分离服务）",
+    )
+    speaker_strategy: Literal[
+        "external",
+        "native",
+        "fallback_diarization",
+        "fallback_backend",
+        "ignore",
+        "error",
+    ] = Field(
+        ...,
+        description="当 with_speaker=true 时的实际说话人策略（考虑当前配置）",
+    )
 
 
 class BackendInfoResponse(BaseModel):

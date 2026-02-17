@@ -37,12 +37,35 @@ async def get_backend_info() -> BackendInfoResponse:
         logger.warning(f"Failed to read backend.get_info(): {e}")
 
     supports_speaker = _cap_bool(getattr(backend, "supports_speaker", False))
+    supports_speaker_external = bool(getattr(settings, "speaker_external_diarizer_enable", False)) and bool(
+        str(getattr(settings, "speaker_external_diarizer_base_url", "")).strip()
+    )
+    supports_speaker_fallback = bool(getattr(settings, "speaker_fallback_diarization_enable", False)) and bool(
+        str(getattr(settings, "speaker_fallback_diarization_base_url", "")).strip()
+    )
+
+    if supports_speaker_external:
+        speaker_strategy = "external"
+    elif supports_speaker:
+        speaker_strategy = "native"
+    elif supports_speaker_fallback:
+        speaker_strategy = "fallback_diarization"
+    else:
+        behavior = settings.speaker_unsupported_behavior_effective
+        if behavior == "ignore":
+            speaker_strategy = "ignore"
+        elif behavior == "error":
+            speaker_strategy = "error"
+        else:
+            speaker_strategy = "fallback_backend"
+
     capabilities = BackendCapabilities(
         supports_speaker=supports_speaker,
         supports_streaming=_cap_bool(getattr(backend, "supports_streaming", False)),
         supports_hotwords=_cap_bool(getattr(backend, "supports_hotwords", False)),
-        supports_speaker_fallback=bool(getattr(settings, "speaker_fallback_diarization_enable", False))
-        and (supports_speaker is False),
+        supports_speaker_fallback=supports_speaker_fallback and (supports_speaker is False),
+        supports_speaker_external=supports_speaker_external,
+        speaker_strategy=speaker_strategy,
     )
 
     return BackendInfoResponse(

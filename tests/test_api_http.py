@@ -51,6 +51,8 @@ def test_backend_info_endpoint(client):
     assert caps["supports_streaming"] is False
     assert caps["supports_hotwords"] is False
     assert caps["supports_speaker_fallback"] is False
+    assert caps["supports_speaker_external"] is False
+    assert caps["speaker_strategy"] == "native"
 
     assert data["speaker_unsupported_behavior"] in {"error", "fallback", "ignore"}
 

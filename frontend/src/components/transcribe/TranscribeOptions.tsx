@@ -62,6 +62,7 @@ export function TranscribeOptions() {
 
   const supportsSpeaker = backendInfoQuery.data?.capabilities.supports_speaker
   const supportsSpeakerFallback = backendInfoQuery.data?.capabilities.supports_speaker_fallback
+  const speakerStrategy = backendInfoQuery.data?.capabilities.speaker_strategy
   const advancedEnabled = advancedAsrOptionsText.trim().length > 0
 
   const applyAsrOptionsTemplate = (template: Record<string, unknown>) => {
@@ -117,14 +118,34 @@ export function TranscribeOptions() {
                 <Badge
                   variant="outline"
                   className={
-                    supportsSpeaker
+                    speakerStrategy === 'native'
                       ? 'border-green-200 text-green-700 bg-green-500/5'
-                      : supportsSpeakerFallback
-                        ? 'border-blue-200 text-blue-700 bg-blue-500/5'
-                        : 'border-amber-200 text-amber-700 bg-amber-500/5'
+                      : speakerStrategy === 'external'
+                        ? 'border-purple-200 text-purple-700 bg-purple-500/5'
+                        : speakerStrategy === 'fallback_diarization' || speakerStrategy === 'fallback_backend'
+                          ? 'border-blue-200 text-blue-700 bg-blue-500/5'
+                          : speakerStrategy === 'error'
+                            ? 'border-red-200 text-red-700 bg-red-500/5'
+                            : 'border-amber-200 text-amber-700 bg-amber-500/5'
                   }
                 >
-                  {supportsSpeaker ? '支持说话人' : supportsSpeakerFallback ? 'fallback 说话人' : '不支持说话人'}
+                  {speakerStrategy === 'native'
+                    ? '支持说话人'
+                    : speakerStrategy === 'external'
+                      ? 'external 说话人'
+                      : speakerStrategy === 'fallback_diarization'
+                        ? 'fallback 说话人'
+                        : speakerStrategy === 'fallback_backend'
+                          ? '回退后端说话人'
+                          : speakerStrategy === 'ignore'
+                            ? '忽略说话人'
+                            : speakerStrategy === 'error'
+                              ? '说话人会报错'
+                              : supportsSpeaker
+                                ? '支持说话人'
+                                : supportsSpeakerFallback
+                                  ? 'fallback 说话人'
+                                  : '不支持说话人'}
                 </Badge>
               </div>
             )}
@@ -205,11 +226,21 @@ export function TranscribeOptions() {
               </Select>
             </div>
 
-            {supportsSpeaker === false && (
+            {speakerStrategy && speakerStrategy !== 'native' && (
               <p className="text-xs text-muted-foreground">
-                {supportsSpeakerFallback
-                  ? '当前后端原生不支持说话人识别；已启用 fallback（需要辅助服务可用）。'
-                  : '当前后端不支持说话人识别，将自动忽略该开关。'}
+                {speakerStrategy === 'external'
+                  ? '将使用 external diarizer 生成说话人 turn；若 diarizer 不可用会自动降级。'
+                  : speakerStrategy === 'fallback_diarization'
+                    ? '当前后端原生不支持说话人识别；将使用辅助服务生成分段并按 turn 转写。'
+                    : speakerStrategy === 'fallback_backend'
+                      ? '当前后端不支持说话人识别；将回退到 PyTorch 后端执行说话人转写。'
+                    : speakerStrategy === 'ignore'
+                      ? '当前后端不支持说话人识别，将自动忽略该开关。'
+                    : speakerStrategy === 'error'
+                      ? '当前后端不支持说话人识别；开启该开关会报错。'
+                      : supportsSpeakerFallback
+                        ? '当前后端原生不支持说话人识别；已启用 fallback（需要辅助服务可用）。'
+                        : '当前后端不支持说话人识别，将自动忽略该开关。'}
               </p>
             )}
           </div>
