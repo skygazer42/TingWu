@@ -88,6 +88,15 @@ class Settings(BaseSettings):
     speaker_fallback_max_turn_duration_s: float = 25.0
     speaker_fallback_max_turns: int = 200
 
+    # ------------------------------------------------------------
+    # Speaker external diarizer (外部说话人分离服务)
+    # ------------------------------------------------------------
+    speaker_external_diarizer_enable: bool = False
+    speaker_external_diarizer_base_url: str = ""
+    speaker_external_diarizer_timeout_s: float = 30.0
+    speaker_external_diarizer_max_turn_duration_s: float = 25.0
+    speaker_external_diarizer_max_turns: int = 200
+
     # GGUF 后端配置 (FunASR-Nano-GGUF)
     gguf_encoder_path: str = "models/Fun-ASR-Nano-Encoder-Adaptor.fp32.onnx"
     gguf_ctc_path: str = "models/Fun-ASR-Nano-CTC.int8.onnx"
