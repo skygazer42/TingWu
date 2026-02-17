@@ -102,7 +102,7 @@ TingWu 现有「文件上传转写」已经支持：
 ## 前端设计
 
 ### 组件复用
-- `UrlTranscribe`：输入 URL + 基础选项（说话人/热词/LLM）
+- `UrlTranscribe`：输入 URL + 提交（转写选项统一由右侧 `TranscribeOptions` 配置）
 - `TaskManager`：任务列表 UI（等待/处理中/完成/失败 + 查看/删除/重试）
 - `TranscriptView` / `Timeline`：展示最终结果
 
@@ -162,4 +162,3 @@ TingWu 现有「文件上传转写」已经支持：
   - 任务状态可从 pending→processing→success
   - 点击查看后能展示时间轴 + transcript
   - 切换后端不会影响已提交任务的轮询（仍能正确取回结果）
-
