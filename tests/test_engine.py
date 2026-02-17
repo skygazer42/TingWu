@@ -279,3 +279,50 @@ def test_request_post_processor_inherits_global_acronym_merge_default(mock_model
     pp = engine._get_request_post_processor(asr_options={"postprocess": {"punc_merge_enable": False}})
 
     assert pp.process("A I 技术") == "AI 技术"
+
+
+def test_transcribe_long_audio_post_process_runs_after_merge_itn_regression(mock_model_manager, monkeypatch):
+    """Regression: post-processing must run AFTER merge for long audio.
+
+    If ITN is applied per chunk, merging chunk texts like "一百" + "零一" would become
+    "100" + "01" => "10001" (wrong). The correct behavior is merge first ("一百零一"),
+    then ITN => "101".
+    """
+    import numpy as np
+
+    from src.core.audio.chunker import AudioChunker
+    from src.core.engine import TranscriptionEngine
+
+    mock_model_manager.backend.supports_speaker = True
+    mock_model_manager.backend.transcribe.side_effect = [
+        {"text": "一百", "sentence_info": []},
+        {"text": "零一", "sentence_info": []},
+    ]
+
+    engine = TranscriptionEngine()
+
+    chunker = AudioChunker(max_chunk_duration=0.5, min_chunk_duration=0.1, overlap_duration=0.0)
+
+    # Force a deterministic 2-chunk split without involving silence detection.
+    chunk1 = np.zeros(16000, dtype=np.float32)
+    chunk2 = np.zeros(16000, dtype=np.float32)
+    chunker.split = Mock(
+        return_value=[
+            (chunk1, 0, 16000),
+            (chunk2, 16000, 32000),
+        ]
+    )
+
+    monkeypatch.setattr(engine, "_get_request_chunker", lambda _opts: chunker)
+
+    # 2s float32 audio -> long audio relative to max_chunk_duration=0.5s.
+    audio = np.zeros(2 * 16000, dtype=np.float32)
+    out = engine.transcribe_long_audio(
+        audio,
+        apply_hotword=True,  # enables post_process (ITN) in correction pipeline
+        max_workers=1,
+        asr_options={"chunking": {"max_chunk_duration_s": 0.5, "overlap_chars": 0}},
+    )
+
+    assert out["raw_text"] == "一百零一"
+    assert out["text"] == "101"
