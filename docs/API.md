@@ -1,6 +1,6 @@
 # TingWu 语音转写服务 API 文档
 
-> 版本: 1.0.0 | 更新日期: 2026-02-02
+> 版本: 1.0.0 | 更新日期: 2026-02-17
 
 ## 目录
 
@@ -22,12 +22,15 @@
 
 TingWu 是一个高性能的中文语音转写服务，支持：
 
-- **多后端支持**: PyTorch、ONNX、SenseVoice、GGUF、Qwen3-ASR(远程)、VibeVoice-ASR(远程)、Router
+- **多后端支持**: PyTorch、ONNX、SenseVoice、GGUF、Whisper、Qwen3-ASR(远程包装)、VibeVoice-ASR(远程包装)、Router
 - **实时流式转写**: WebSocket 双向识别
 - **说话人识别**: 自动区分多人对话
 - **热词纠错**: 支持动态热词注入
 - **LLM 润色**: 支持多种 LLM 角色纠错
 - **文本后处理**: ITN、标点恢复、繁简转换等
+
+> 说明：Qwen3 / VibeVoice 在本项目中通常以“远程 ASR + TingWu wrapper”的方式部署。
+> 也就是说，真正提供 TingWu API 的是 `tingwu-qwen3` / `tingwu-vibevoice` 容器；而 `qwen3-asr` / `vibevoice-asr` 是 OpenAI-compatible 服务端。
 
 **基础URL**: `http://localhost:8000`
 
@@ -41,23 +44,16 @@ TingWu 是一个高性能的中文语音转写服务，支持：
 
 ## 通用响应格式
 
-### 成功响应
+本服务接口目前**没有统一的** `{code, message, data}` 外层封装；请以各接口的响应示例为准。
+
+- 多数成功响应包含 `code` 字段（例如 `0/200/202`），并直接返回业务字段（如 `text`、`sentences`）。
+- 发生参数校验/处理错误时，FastAPI 通常返回 HTTP `4xx/5xx`，body 形如：`{"detail": "..."}`。
+
+### 错误响应（FastAPI 默认）
 
 ```json
 {
-  "code": 0,
-  "message": "success",
-  "data": { ... }
-}
-```
-
-### 错误响应
-
-```json
-{
-  "code": 1001,
-  "message": "错误描述",
-  "detail": "详细错误信息"
+  "detail": "错误描述"
 }
 ```
 
@@ -176,6 +172,39 @@ tingwu_rtf_average 0.15
 
 ---
 
+### 获取当前后端信息（前端探测）
+
+用于多容器/多端口部署时，前端探测当前服务实例的后端类型与能力。
+
+```
+GET /api/v1/backend
+```
+
+**响应示例**:
+
+```json
+{
+  "backend": "pytorch",
+  "info": {
+    "name": "PyTorchBackend",
+    "type": "pytorch",
+    "supports_streaming": true,
+    "supports_hotwords": true,
+    "supports_speaker": true,
+    "loaded": true
+  },
+  "capabilities": {
+    "supports_speaker": true,
+    "supports_streaming": true,
+    "supports_hotwords": true,
+    "supports_speaker_fallback": false
+  },
+  "speaker_unsupported_behavior": "ignore"
+}
+```
+
+---
+
 ## 转写接口
 
 ### 单文件转写
@@ -197,6 +226,7 @@ Content-Type: multipart/form-data
 | apply_llm | bool | ❌ | false | 是否启用 LLM 润色 |
 | llm_role | string | ❌ | "default" | LLM 角色 (default/translator/code/corrector) |
 | hotwords | string | ❌ | null | 临时热词 (空格分隔) |
+| asr_options | string | ❌ | null | 请求级调参 JSON 字符串（例如 `{"postprocess": {...}}`） |
 
 **响应示例**:
 
@@ -204,16 +234,27 @@ Content-Type: multipart/form-data
 {
   "code": 0,
   "text": "今天的会议主要讨论人工智能的应用。",
+  "text_accu": null,
   "sentences": [
     {
       "text": "今天的会议主要讨论人工智能的应用。",
       "start": 0,
       "end": 3500,
-      "speaker": "speaker_0",
+      "speaker": "说话人甲",
       "speaker_id": 0
     }
   ],
-  "transcript": "[00:00:00] speaker_0: 今天的会议主要讨论人工智能的应用。",
+  "speaker_turns": [
+    {
+      "speaker": "说话人甲",
+      "speaker_id": 0,
+      "start": 0,
+      "end": 3500,
+      "text": "今天的会议主要讨论人工智能的应用。",
+      "sentence_count": 1
+    }
+  ],
+  "transcript": "[00:00 - 00:03] 说话人甲: 今天的会议主要讨论人工智能的应用。",
   "raw_text": "今天的会议主要讨论人工只能的应用"
 }
 ```
@@ -248,6 +289,7 @@ Content-Type: multipart/form-data
 | apply_llm | bool | ❌ | false | 是否启用 LLM 润色 |
 | llm_role | string | ❌ | "default" | LLM 角色 |
 | hotwords | string | ❌ | null | 临时热词 |
+| asr_options | string | ❌ | null | 请求级调参 JSON 字符串（同单文件） |
 | max_concurrent | int | ❌ | 3 | 最大并发数 |
 
 **响应示例**:
@@ -295,18 +337,10 @@ Content-Type: multipart/form-data
 
 ```
 POST /api/v1/trans/url
-Content-Type: application/json
+Content-Type: multipart/form-data
 ```
 
-**请求体**:
-
-```json
-{
-  "audio_url": "https://example.com/audio.mp3",
-  "with_speaker": false,
-  "apply_hotword": true
-}
-```
+**请求参数（表单）**:
 
 **请求参数**:
 
@@ -315,18 +349,31 @@ Content-Type: application/json
 | audio_url | string | ✅ | - | 音频文件 URL |
 | with_speaker | bool | ❌ | false | 是否启用说话人识别 |
 | apply_hotword | bool | ❌ | true | 是否应用热词纠错 |
+| apply_llm | bool | ❌ | false | 是否启用 LLM 润色 |
+| llm_role | string | ❌ | "default" | LLM 角色 |
+| hotwords | string | ❌ | null | 临时热词 (空格分隔) |
+| asr_options | string | ❌ | null | 请求级调参 JSON 字符串（同单文件） |
 
 **响应示例**:
 
 ```json
 {
-  "code": 0,
-  "status": "pending",
+  "code": 200,
+  "status": "success",
   "message": "任务已提交",
   "data": {
     "task_id": "task_abc123"
   }
 }
+```
+
+**cURL 示例**:
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/trans/url" \
+  -F "audio_url=https://example.com/audio.mp3" \
+  -F "with_speaker=false" \
+  -F "apply_hotword=true"
 ```
 
 ---
@@ -337,17 +384,10 @@ Content-Type: application/json
 
 ```
 POST /api/v1/result
-Content-Type: application/json
+Content-Type: multipart/form-data
 ```
 
-**请求体**:
-
-```json
-{
-  "task_id": "task_abc123",
-  "delete": true
-}
-```
+**请求参数（表单）**:
 
 **请求参数**:
 
@@ -360,9 +400,12 @@ Content-Type: application/json
 
 ```json
 {
-  "code": 0,
+  "code": 202,
   "status": "processing",
-  "message": "任务处理中"
+  "message": "任务处理中",
+  "data": {
+    "task_id": "task_abc123"
+  }
 }
 ```
 
@@ -370,12 +413,17 @@ Content-Type: application/json
 
 ```json
 {
-  "code": 0,
+  "code": 200,
   "status": "success",
-  "message": "任务完成",
+  "message": "获取结果成功",
   "data": {
+    "code": 0,
     "text": "转写文本...",
-    "sentences": [...]
+    "text_accu": null,
+    "sentences": [...],
+    "speaker_turns": null,
+    "transcript": null,
+    "raw_text": "转写文本..."
   }
 }
 ```
@@ -421,16 +469,16 @@ Content-Type: multipart/form-data
     {
       "sentence_index": 1,
       "text": "第一句话",
-      "start": "00:00:00,000",
-      "end": "00:00:02,500",
-      "speaker": "speaker_0"
+      "start": "00:00:00.000",
+      "end": "00:00:02.500",
+      "speaker": "说话人甲"
     },
     {
       "sentence_index": 2,
       "text": "第二句话",
-      "start": "00:00:02,600",
-      "end": "00:00:05,000",
-      "speaker": "speaker_1"
+      "start": "00:00:02.600",
+      "end": "00:00:05.000",
+      "speaker": "说话人乙"
     }
   ],
   "language": "zh"
@@ -464,6 +512,7 @@ Content-Type: multipart/form-data
 {
   "code": 0,
   "text": "视频中的语音转写文本...",
+  "text_accu": null,
   "sentences": [
     {
       "text": "欢迎观看本视频",
@@ -471,7 +520,7 @@ Content-Type: multipart/form-data
       "end": 3000
     }
   ],
-  "transcript": "[00:00:01] 欢迎观看本视频",
+  "transcript": null,
   "raw_text": "欢迎观看本视频"
 }
 ```
@@ -813,7 +862,8 @@ WebSocket ws://localhost:8000/ws/realtime
   "connection_id": "conn_abc123",
   "config": {
     "chunk_size": 9600,
-    "sample_rate": 16000
+    "heartbeat_interval": 30,
+    "compression": false
   }
 }
 ```
@@ -913,17 +963,34 @@ interface SentenceInfo {
 }
 ```
 
+### SpeakerTurn
+
+说话人 turn/段落（按连续发言合并的片段）。
+
+```typescript
+interface SpeakerTurn {
+  speaker: string;       // 说话人标签（说话人甲/乙/… 或 说话人1/2/3）
+  speaker_id: number;    // 说话人 ID（从 0 开始的顺序号）
+  start: number;         // 开始时间 (毫秒)
+  end: number;           // 结束时间 (毫秒)
+  text: string;          // turn 文本
+  sentence_count: number;// 合并的句子数
+}
+```
+
 ### TranscribeResponse
 
 转写响应。
 
 ```typescript
 interface TranscribeResponse {
-  code: number;                    // 状态码 (0=成功)
+  code: number;                    // 状态码（通常 0=成功）
   text: string;                    // 完整转写文本
+  text_accu?: string | null;       // 精确拼接文本（长音频 overlap 去重更严格）
   sentences: SentenceInfo[];       // 句子列表
-  transcript?: string;             // 格式化转写稿
-  raw_text?: string;               // 原始文本 (未纠错)
+  speaker_turns?: SpeakerTurn[] | null; // 说话人 turn（with_speaker=true 时可能返回）
+  transcript?: string | null;      // 格式化转写稿（with_speaker=true 时可能返回）
+  raw_text?: string | null;        // 原始文本 (未纠错)
 }
 ```
 
@@ -999,24 +1066,62 @@ interface MetricsResponse {
 }
 ```
 
+### BackendInfoResponse
+
+后端探测接口 `GET /api/v1/backend` 的响应。
+
+```typescript
+interface BackendCapabilities {
+  supports_speaker: boolean;
+  supports_streaming: boolean;
+  supports_hotwords: boolean;
+  supports_speaker_fallback?: boolean;
+}
+
+interface BackendInfoResponse {
+  backend: string;                 // ASR_BACKEND 值
+  info: Record<string, any>;       // backend.get_info() 输出（安全元信息）
+  capabilities: BackendCapabilities;
+  speaker_unsupported_behavior: 'error' | 'fallback' | 'ignore';
+}
+```
+
+### Async Task Responses
+
+异步 URL 转写（`/api/v1/trans/url` + `/api/v1/result`）的响应结构。
+
+```typescript
+interface UrlTranscribeResponse {
+  code: number;
+  status: 'success' | 'error';
+  message: string;
+  data?: { task_id: string };
+}
+
+interface TaskResultResponse {
+  code: number;
+  status: 'pending' | 'processing' | 'success' | 'error';
+  message: string;
+  data?: { task_id: string } | TranscribeResponse;
+}
+```
+
 ---
 
 ## 错误码
 
-| 错误码 | 说明 |
-|--------|------|
-| 0 | 成功 |
-| 1001 | 参数错误 |
-| 1002 | 文件格式不支持 |
-| 1003 | 文件过大 |
-| 1004 | 任务不存在 |
-| 2001 | 转写失败 |
-| 2002 | 模型未加载 |
-| 2003 | 后端不支持该功能 |
-| 3001 | 配置更新失败 |
-| 3002 | 配置项不可修改 |
-| 4001 | WebSocket 连接失败 |
-| 5001 | 内部服务错误 |
+目前服务端主要使用 **HTTP 状态码**表达错误语义（例如 `400/422/500`），响应体通常为 FastAPI 默认格式：
+
+```json
+{
+  "detail": "错误描述"
+}
+```
+
+少数接口会在成功响应中包含 `code` 字段，但该字段并不是一个全局稳定的“错误码体系”。建议前端按以下方式处理：
+
+- 同步转写（`/api/v1/transcribe` / `.../batch` / `.../trans/video`）：`code === 0` 视为成功
+- 异步任务（`/api/v1/trans/url` + `/api/v1/result`）：以 `status`（pending/processing/success/error）为主
 
 ---
 
