@@ -1,7 +1,9 @@
 # ONNX 优化后端 Dockerfile
-# 使用 ONNX Runtime 进行高性能 CPU 推理
+# 使用 ONNX Runtime 进行推理
 
-FROM python:3.10-slim AS builder
+ARG TORCH_BASE_IMAGE=pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+FROM ${TORCH_BASE_IMAGE} AS python-builder
 
 WORKDIR /app
 
@@ -12,14 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # 安装基础依赖
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 安装 ONNX 相关依赖
-RUN pip install --no-cache-dir --prefix=/install \
+RUN pip install --no-cache-dir \
     funasr-onnx>=0.1.0 \
     onnxruntime>=1.16.0
 
-FROM python:3.10-slim
+FROM ${TORCH_BASE_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -28,8 +30,7 @@ ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=8 \
     MKL_NUM_THREADS=8 \
     # 默认使用 ONNX 后端
-    ASR_BACKEND=onnx \
-    DEVICE=cpu
+    ASR_BACKEND=onnx
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -39,7 +40,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /install /usr/local
+COPY --from=python-builder /opt/conda /opt/conda
 
 WORKDIR /app
 

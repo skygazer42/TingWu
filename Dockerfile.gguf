@@ -6,7 +6,9 @@
 # - 还需要你把模型文件和 llama.cpp 动态库放到 ./data/models (并挂载到容器 /app/data/models)
 # - 该镜像以 API 为主，不强制构建前端（可按需加上 frontend-builder 阶段）
 
-FROM python:3.10-slim AS builder
+ARG TORCH_BASE_IMAGE=pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+FROM ${TORCH_BASE_IMAGE} AS python-builder
 
 WORKDIR /app
 
@@ -17,21 +19,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 
 # 安装基础依赖
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 安装 GGUF/ONNX 相关依赖
-RUN pip install --no-cache-dir --prefix=/install \
+RUN pip install --no-cache-dir \
     onnxruntime>=1.16.0 \
     gguf>=0.10.0
 
-FROM python:3.10-slim
+FROM ${TORCH_BASE_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     # 默认使用 gguf 后端
-    ASR_BACKEND=gguf \
-    DEVICE=cpu
+    ASR_BACKEND=gguf
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -41,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /install /usr/local
+COPY --from=python-builder /opt/conda /opt/conda
 
 WORKDIR /app
 
@@ -57,4 +58,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 CMD ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
