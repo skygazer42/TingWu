@@ -22,6 +22,9 @@ from src.core.text_processor.text_corrector import TextCorrector
 from src.core.audio.chunker import AudioChunker
 from src.core.audio.slice import ensure_pcm16le_16k_mono_bytes, slice_pcm16le
 from src.models.backends.remote_utils import pcm16le_to_wav_bytes
+from src.core.speaker.external_diarizer_client import fetch_diarizer_segments
+from src.core.speaker.external_diarizer_normalize import normalize_segments
+from src.core.speaker.external_diarizer_turns import segments_to_turns
 
 logger = logging.getLogger(__name__)
 
@@ -1012,6 +1015,38 @@ class TranscriptionEngine:
         raw_result = None
 
         # ------------------------------------------------------------
+        # Speaker external diarizer (forced, best-effort)
+        # ------------------------------------------------------------
+        if with_speaker and bool(getattr(settings, "speaker_external_diarizer_enable", False)) and str(
+            getattr(settings, "speaker_external_diarizer_base_url", "")
+        ).strip():
+            try:
+                speaker_options = self._get_request_speaker_options(asr_options)
+                out = await self._transcribe_with_external_diarizer(
+                    audio_input,
+                    backend=backend,
+                    injection_hotwords=injection_hotwords,
+                    post_processor=post_processor,
+                    effective_backend_kwargs=effective_backend_kwargs,
+                    speaker_options=speaker_options,
+                    apply_hotword=apply_hotword,
+                    apply_llm=apply_llm,
+                    llm_role=llm_role,
+                )
+                if out is not None:
+                    return out
+                raise ValueError("external diarizer returned no segments")
+            except Exception as e:
+                backend_name = backend.get_info().get("name", "unknown")
+                logger.warning(f"External diarizer failed for backend {backend_name} (ignored): {e}")
+
+                # Failure policy (user expectation):
+                # - If backend supports native speaker, fall back to native path.
+                # - Otherwise, ignore with_speaker and return normal transcription.
+                if not getattr(backend, "supports_speaker", False):
+                    with_speaker = False
+
+        # ------------------------------------------------------------
         # Speaker fallback diarization (best-effort)
         # ------------------------------------------------------------
         if with_speaker and not backend.supports_speaker:
@@ -1389,6 +1424,224 @@ class TranscriptionEngine:
             "speaker_turns": speaker_turns,
             "transcript": transcript,
             "raw_text": text,
+        }
+
+    async def _transcribe_with_external_diarizer(
+        self,
+        audio_input: Union[bytes, str, Path],
+        *,
+        backend,
+        injection_hotwords: Optional[str],
+        post_processor: TextPostProcessor,
+        effective_backend_kwargs: Dict[str, Any],
+        speaker_options: Dict[str, Any],
+        apply_hotword: bool,
+        apply_llm: bool,
+        llm_role: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Best-effort forced diarization via an external diarizer service.
+
+        Returns:
+            A TingWu-style result dict with speaker fields when successful, otherwise None.
+        """
+        base_url = str(getattr(settings, "speaker_external_diarizer_base_url", "") or "").rstrip("/")
+        if not base_url:
+            return None
+
+        timeout_s = float(getattr(settings, "speaker_external_diarizer_timeout_s", 30.0) or 30.0)
+        max_turn_duration_s = float(getattr(settings, "speaker_external_diarizer_max_turn_duration_s", 25.0) or 0.0)
+        max_turns = int(getattr(settings, "speaker_external_diarizer_max_turns", 200) or 0)
+
+        pcm16le = ensure_pcm16le_16k_mono_bytes(audio_input)
+        if not pcm16le:
+            return None
+
+        wav_bytes = pcm16le_to_wav_bytes(pcm16le, sample_rate=16000, channels=1, sampwidth=2)
+        duration_ms = (len(pcm16le) // 2) * 1000 // 16000
+
+        raw_segments = await fetch_diarizer_segments(
+            base_url=base_url,
+            wav_bytes=wav_bytes,
+            timeout_s=timeout_s,
+        )
+        segments = normalize_segments(raw_segments, duration_ms=duration_ms)
+        if not segments:
+            return None
+
+        label_style = str(speaker_options.get("label_style", "zh"))
+        speaker_labeler = SpeakerLabeler(label_style=label_style)
+
+        turn_merge_enable = bool(speaker_options.get("turn_merge_enable", True))
+        if turn_merge_enable:
+            turns = segments_to_turns(
+                segments,
+                gap_ms=int(speaker_options.get("turn_merge_gap_ms", settings.speaker_turn_merge_gap_ms)),
+                label_style=label_style,
+            )
+        else:
+            labeled = speaker_labeler.label_speakers(
+                [
+                    {"spk": s.get("spk"), "start": s.get("start"), "end": s.get("end"), "text": ""}
+                    for s in segments
+                ],
+                spk_key="spk",
+            )
+            turns = [
+                {
+                    "speaker": s.get("speaker"),
+                    "speaker_id": s.get("speaker_id"),
+                    "start": s.get("start", 0),
+                    "end": s.get("end", 0),
+                    "text": "",
+                    "sentence_count": 1,
+                }
+                for s in labeled
+            ]
+
+        max_turn_duration_ms = int(max_turn_duration_s * 1000) if max_turn_duration_s > 0 else 0
+        normalized_turns: List[Dict[str, Any]] = []
+        for seg in turns:
+            try:
+                start_ms = int(seg.get("start", 0) or 0)
+            except (TypeError, ValueError):
+                start_ms = 0
+            try:
+                end_ms = int(seg.get("end", start_ms) or start_ms)
+            except (TypeError, ValueError):
+                end_ms = start_ms
+            if end_ms < start_ms:
+                end_ms = start_ms
+
+            if max_turn_duration_ms > 0 and (end_ms - start_ms) > max_turn_duration_ms:
+                cursor = start_ms
+                while cursor < end_ms:
+                    sub_end = min(cursor + max_turn_duration_ms, end_ms)
+                    normalized_turns.append(
+                        {
+                            "speaker": seg.get("speaker"),
+                            "speaker_id": seg.get("speaker_id"),
+                            "start": cursor,
+                            "end": sub_end,
+                            "text": "",
+                            "sentence_count": 1,
+                        }
+                    )
+                    cursor = sub_end
+            else:
+                normalized_turns.append(
+                    {
+                        "speaker": seg.get("speaker"),
+                        "speaker_id": seg.get("speaker_id"),
+                        "start": start_ms,
+                        "end": end_ms,
+                        "text": "",
+                        "sentence_count": int(seg.get("sentence_count", 1) or 1),
+                    }
+                )
+
+        if max_turns > 0 and len(normalized_turns) > max_turns:
+            return None
+
+        raw_text_parts: List[str] = []
+        out_sentences: List[Dict[str, Any]] = []
+        for seg in normalized_turns:
+            start_ms = int(seg.get("start", 0) or 0)
+            end_ms = int(seg.get("end", start_ms) or start_ms)
+            pcm_slice = slice_pcm16le(pcm16le, start_ms=start_ms, end_ms=end_ms)
+            if not pcm_slice:
+                continue
+
+            raw = backend.transcribe(
+                pcm_slice,
+                hotwords=injection_hotwords,
+                with_speaker=False,
+                **effective_backend_kwargs,
+            )
+            raw_seg_text = str((raw or {}).get("text", "") or "")
+            raw_text_parts.append(raw_seg_text)
+
+            seg_text = raw_seg_text
+            all_similars: List[Tuple[str, str, float]] = []
+            if apply_hotword:
+                seg_text, similars = self._apply_corrections(seg_text, post_processor=post_processor)
+                all_similars.extend(similars)
+
+            speaker = seg.get("speaker")
+            speaker_id = seg.get("speaker_id")
+            try:
+                speaker_id_int = int(speaker_id)
+            except (TypeError, ValueError):
+                speaker_id_int = -1
+
+            speaker_str = str(speaker).strip() if isinstance(speaker, str) else ""
+            if not speaker_str and speaker_id_int >= 0:
+                speaker_str = speaker_labeler._get_speaker_label(speaker_id_int)
+            if not speaker_str:
+                speaker_str = "未知"
+
+            out_sentences.append(
+                {
+                    "text": seg_text,
+                    "start": start_ms,
+                    "end": end_ms,
+                    "speaker": speaker_str,
+                    "speaker_id": speaker_id_int,
+                }
+            )
+
+        if not out_sentences:
+            return None
+
+        raw_text = "".join(raw_text_parts)
+        text = "".join([s.get("text", "") for s in out_sentences])
+        if apply_llm:
+            if settings.llm_fulltext_enable:
+                text = await self._apply_llm_fulltext_polish(
+                    text,
+                    max_chars=settings.llm_fulltext_max_chars,
+                    similarity_candidates=[],
+                )
+            else:
+                text = await self._apply_llm_polish(text, role=llm_role, similarity_candidates=[])
+
+        # Build speaker turns for readable transcript output.
+        speaker_turns: List[Dict[str, Any]] = []
+        if out_sentences:
+            if bool(speaker_options.get("turn_merge_enable", True)):
+                speaker_turns = build_speaker_turns(
+                    out_sentences,
+                    gap_ms=int(speaker_options.get("turn_merge_gap_ms", settings.speaker_turn_merge_gap_ms)),
+                    min_chars=int(
+                        speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                    ),
+                )
+            else:
+                min_chars = int(
+                    speaker_options.get("turn_merge_min_chars", settings.speaker_turn_merge_min_chars)
+                )
+                speaker_turns = [
+                    {
+                        "speaker": s.get("speaker"),
+                        "speaker_id": s.get("speaker_id"),
+                        "start": s.get("start", 0),
+                        "end": s.get("end", 0),
+                        "text": s.get("text", ""),
+                        "sentence_count": 1,
+                    }
+                    for s in out_sentences
+                    if len(str(s.get("text", "")).strip()) >= min_chars
+                ]
+
+        transcript_source = speaker_turns or out_sentences
+        transcript = speaker_labeler.format_transcript(transcript_source, include_timestamp=True)
+
+        return {
+            "text": text,
+            "text_accu": None,
+            "sentences": out_sentences,
+            "speaker_turns": speaker_turns,
+            "transcript": transcript,
+            "raw_text": raw_text,
         }
 
     async def transcribe_auto_async(
