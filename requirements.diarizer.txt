@@ -1,0 +1,10 @@
+# TingWu external diarizer service (pyannote) dependencies.
+fastapi>=0.110.0
+uvicorn>=0.27.0
+python-multipart>=0.0.9
+httpx>=0.26.0
+numpy>=1.24.0
+
+# Speaker diarization
+pyannote.audio>=3.1.0
+
