@@ -123,6 +123,21 @@ IDIOMS = '''
 # 模糊表达黑名单（包含"几"的表达不转换）
 FUZZY_REGEX = re.compile(r'几')
 
+# ============================================================
+# Pre-normalization helpers (meeting-friendly)
+# ============================================================
+
+_ZERO_CIRCLE_CONTEXT = "零幺一二两三四五六七八九十百千万亿点"
+_ZERO_CIRCLE_FOLLOW = _ZERO_CIRCLE_CONTEXT + "年月日号分秒"
+
+# Replace 〇/○ with 零 when they're clearly used as digits (e.g. 二〇二五年, 〇九).
+# Keep standalone "○○" anonymization placeholders intact by requiring numeric context.
+_ZERO_CIRCLE_RUN = re.compile(rf"(?:(?<=^)|(?<=[{_ZERO_CIRCLE_CONTEXT}]))[〇○]+(?=[{_ZERO_CIRCLE_FOLLOW}])")
+
+_TIME_HALF_INLINE = re.compile(r"([零一二两三四五六七八九十]+)点半")
+_TIME_EXACT_INLINE = re.compile(r"([零一二两三四五六七八九十]+)点整")
+_TIME_QUARTER_INLINE = re.compile(r"([零一二两三四五六七八九十]+)点(一刻|三刻)")
+
 
 # ============================================================
 # 第二部分：范围表达式处理
@@ -441,24 +456,64 @@ def _convert_date_value(original):
 
 def _split_consecutive_value(text):
     """分割连续数值为空格分隔的阿拉伯数字"""
-    unit = ''
-    for c in COMMON_UNITS:
-        if text.endswith(c):
-            unit = c
-            text = text[:-1]
-            break
+    stripped, unit = _strip_unit(text)
 
-    if _consecutive_tens.match(text + unit):
-        parts = re.findall(r'十[一二三四五六七八九]', text)
+    if _consecutive_tens.match(stripped):
+        parts = re.findall(r'十[一二三四五六七八九]', stripped)
         nums = [_convert_value_num(p) for p in parts]
         return ' '.join(nums) + unit
 
-    if _consecutive_hundreds.match(text + unit):
-        parts = re.findall(r'[一二三四五六七八九]百零?[一二三四五六七八九]', text)
+    if _consecutive_hundreds.match(stripped):
+        parts = re.findall(r'[一二三四五六七八九]百零?[一二三四五六七八九]', stripped)
         nums = [_convert_value_num(p) for p in parts]
         return ' '.join(nums) + unit
 
-    return text + unit
+    return text
+
+
+# ============================================================
+# 第六点五部分：口语时间表达预处理（不走 _pattern）
+# ============================================================
+
+def _format_hhmm_from_hour(hour_cn: str, minute: int) -> str:
+    """Format 'X点半/整/一刻/三刻' into HH:MM."""
+    hour_str = _convert_value_num(hour_cn)
+    try:
+        hour = int(str(hour_str).strip())
+    except Exception:
+        # Fallback: keep original hour phrase if parsing fails.
+        return f"{hour_cn}点{minute:02d}"
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _pre_normalize_meeting_time_phrases(text: str) -> str:
+    """Convert common spoken time phrases into HH:MM (meeting-friendly)."""
+    if not text or "点" not in text:
+        return text
+
+    text = _TIME_HALF_INLINE.sub(lambda m: _format_hhmm_from_hour(m.group(1), 30), text)
+    text = _TIME_EXACT_INLINE.sub(lambda m: _format_hhmm_from_hour(m.group(1), 0), text)
+
+    def _quarter_replace(m):
+        hour_cn = m.group(1)
+        which = m.group(2)
+        minute = 15 if which == "一刻" else 45
+        return _format_hhmm_from_hour(hour_cn, minute)
+
+    text = _TIME_QUARTER_INLINE.sub(_quarter_replace, text)
+    return text
+
+
+def _pre_normalize_zero_circles(text: str) -> str:
+    """Normalize 〇/○ -> 零 when used as digits (e.g. 二〇二五年)."""
+    if not text:
+        return text
+
+    def _run_replace(m):
+        return "零" * len(m.group(0))
+
+    return _ZERO_CIRCLE_RUN.sub(_run_replace, text)
 
 
 # ============================================================
@@ -575,6 +630,12 @@ class ChineseITN:
         # 儿化移除 (在 ITN 之前)
         if self.erhua_remove:
             text = remove_erhua(text)
+
+        # Meeting-friendly pre-normalization:
+        # - normalize 〇/○ zero circles in numeric contexts
+        # - convert common spoken time phrases (两点半/十点整/…)
+        text = _pre_normalize_zero_circles(text)
+        text = _pre_normalize_meeting_time_phrases(text)
 
         return _pattern.sub(_replace, text)
 

@@ -75,6 +75,29 @@ class TestChineseITN:
 
         assert itn.convert("十四点三十分") == "14:30"
 
+    def test_time_half_and_exact_hour(self):
+        """测试口语时间表达（半/整）"""
+        from src.core.text_processor import ChineseITN
+        itn = ChineseITN()
+
+        assert itn.convert("两点半") == "02:30"
+        assert itn.convert("十点整") == "10:00"
+
+    def test_zero_circle_digits(self):
+        """测试 〇/○ 作为零（常见年份/日期写法）"""
+        from src.core.text_processor import ChineseITN
+        itn = ChineseITN()
+
+        assert itn.convert("二〇二五年") == "2025年"
+        assert itn.convert("〇九") == "09"
+
+    def test_consecutive_values_with_multi_char_unit(self):
+        """连续数值 + 多字符单位不应截断单位"""
+        from src.core.text_processor import ChineseITN
+        itn = ChineseITN()
+
+        assert itn.convert("十六十七千米每小时") == "16 17km/h"
+
     def test_idiom_blacklist(self):
         """测试成语黑名单（不转换）"""
         from src.core.text_processor import ChineseITN
