@@ -72,7 +72,7 @@ services:
       context: .
       dockerfile: Dockerfile.diarizer
     image: tingwu-diarizer:latest
-    profiles: ["diarizer"]
+    profiles: ["diarizer", "all"]
     container_name: tingwu-diarizer
     ports:
       - "${PORT_DIARIZER:-8300}:8000"
@@ -104,7 +104,7 @@ services:
   # ======================
   tingwu-pytorch:
     <<: *tingwu-base
-    profiles: ["pytorch"]
+    profiles: ["pytorch", "all"]
     container_name: tingwu-pytorch
     ports:
       - "${PORT_PYTORCH:-8101}:8000"
@@ -128,7 +128,7 @@ services:
       context: .
       dockerfile: Dockerfile.onnx
     image: tingwu-speech-service:onnx
-    profiles: ["onnx"]
+    profiles: ["onnx", "all"]
     container_name: tingwu-onnx
     ports:
       - "${PORT_ONNX:-8102}:8000"
@@ -150,7 +150,7 @@ services:
 
   tingwu-sensevoice:
     <<: *tingwu-base
-    profiles: ["sensevoice"]
+    profiles: ["sensevoice", "all"]
     container_name: tingwu-sensevoice
     ports:
       - "${PORT_SENSEVOICE:-8103}:8000"
@@ -172,7 +172,7 @@ services:
 
   tingwu-whisper:
     <<: *tingwu-base
-    profiles: ["whisper"]
+    profiles: ["whisper", "all"]
     container_name: tingwu-whisper
     ports:
       - "${PORT_WHISPER:-8105}:8000"
@@ -200,7 +200,7 @@ services:
       context: .
       dockerfile: Dockerfile.gguf
     image: tingwu-speech-service:gguf
-    profiles: ["gguf"]
+    profiles: ["gguf", "all"]
     container_name: tingwu-gguf
     ports:
       - "${PORT_GGUF:-8104}:8000"
@@ -225,7 +225,7 @@ services:
   # TingWu API for each model.
   qwen3-asr:
     image: qwenllm/qwen3-asr:latest
-    profiles: ["qwen3", "router"]
+    profiles: ["qwen3", "router", "all"]
     container_name: qwen3-asr
     # Expose for debugging (TingWu talks via the docker network name).
     ports:
@@ -297,7 +297,7 @@ services:
 
   tingwu-qwen3:
     <<: *tingwu-base
-    profiles: ["qwen3"]
+    profiles: ["qwen3", "all"]
     container_name: tingwu-qwen3
     ports:
       - "${PORT_TINGWU_QWEN3:-8201}:8000"
