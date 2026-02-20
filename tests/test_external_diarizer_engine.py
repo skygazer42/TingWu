@@ -102,3 +102,50 @@ def test_transcribe_async_with_external_diarizer_builds_speaker_turns(mock_model
     for c in mock_model_manager.backend.transcribe.call_args_list:
         assert c.kwargs.get("with_speaker") is False
 
+
+def test_external_diarizer_long_turn_chunks_and_dedupes_overlap(mock_model_manager, monkeypatch):
+    """Long single-speaker turns should be chunked with overlap and merged by text.
+
+    This avoids both:
+    - boundary truncation (overlap protects mid-word cuts)
+    - duplication (merge_by_text removes overlap repetition)
+    """
+    monkeypatch.setattr(engine_mod.settings, "speaker_unsupported_behavior", "ignore", raising=False)
+    monkeypatch.setattr(engine_mod.settings, "speaker_external_diarizer_enable", True, raising=False)
+    monkeypatch.setattr(
+        engine_mod.settings, "speaker_external_diarizer_base_url", "http://diar:8000", raising=False
+    )
+    # Force turn chunking (but keep it as 2 calls for deterministic testing).
+    monkeypatch.setattr(engine_mod.settings, "speaker_external_diarizer_max_turn_duration_s", 30.0, raising=False)
+
+    async def fake_fetch(*args, **kwargs):
+        return [
+            # One 59s long turn for a single speaker.
+            {"spk": 0, "start": 0, "end": 59000},
+        ]
+
+    # 59 seconds of PCM16LE @16kHz mono
+    audio_bytes = b"\x00" * (59 * 16000 * 2)
+
+    # Simulate a backend that repeats boundary tokens when chunked with overlap.
+    mock_model_manager.backend.transcribe.side_effect = [
+        {"text": "你好世界", "sentence_info": []},
+        {"text": "世界再见", "sentence_info": []},
+    ]
+
+    with patch.object(engine_mod, "fetch_diarizer_segments", new=fake_fetch):
+        engine = engine_mod.TranscriptionEngine()
+        out = asyncio.run(
+            engine.transcribe_async(
+                audio_bytes,
+                with_speaker=True,
+                apply_hotword=False,
+                apply_llm=False,
+                asr_options={"speaker": {"label_style": "numeric"}},
+            )
+        )
+
+    assert out["sentences"][0]["speaker"] == "说话人1"
+    assert out["sentences"][0]["text"] == "你好世界再见"
+    assert out["text"] == "你好世界再见"
+    assert mock_model_manager.backend.transcribe.call_count == 2

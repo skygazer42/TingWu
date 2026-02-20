@@ -1542,8 +1542,49 @@ class TranscriptionEngine:
                 for s in labeled
             ]
 
+        # If turns are long, we chunk *inside* each turn with overlap then merge transcripts by text.
+        # This avoids mid-word truncation at hard boundaries and reduces overlap duplication.
+        #
+        # NOTE: We keep diarizer-provided [start,end] for the final sentence so timestamps never overlap.
         max_turn_duration_ms = int(max_turn_duration_s * 1000) if max_turn_duration_s > 0 else 0
-        normalized_turns: List[Dict[str, Any]] = []
+        turn_chunker: Optional[AudioChunker] = None
+        if max_turn_duration_ms > 0:
+            import math
+
+            base_strategy = getattr(self.audio_chunker, "strategy", "silence") or "silence"
+            base_overlap = float(getattr(self.audio_chunker, "overlap_duration", 0.5) or 0.5)
+            base_min_silence = float(getattr(self.audio_chunker, "min_silence_duration", 0.3) or 0.3)
+
+            silence_threshold_db = -40.0
+            try:
+                if getattr(self.audio_chunker, "silence_threshold", None):
+                    silence_threshold_db = 20.0 * math.log10(float(self.audio_chunker.silence_threshold))
+            except Exception:
+                silence_threshold_db = -40.0
+
+            max_chunk_s = float(max_turn_duration_s)
+            base_min_chunk = float(getattr(self.audio_chunker, "min_chunk_duration", 5.0) or 5.0)
+            min_chunk_s = min(max_chunk_s, base_min_chunk)
+            if min_chunk_s <= 0:
+                # Keep splitting safe even if user config is weird.
+                min_chunk_s = max(0.5, max_chunk_s * 0.5)
+
+            overlap_s = base_overlap
+            if overlap_s < 0:
+                overlap_s = 0.0
+
+            turn_chunker = AudioChunker(
+                max_chunk_duration=max_chunk_s,
+                min_chunk_duration=min_chunk_s,
+                overlap_duration=overlap_s,
+                silence_threshold_db=silence_threshold_db,
+                min_silence_duration=base_min_silence,
+                strategy=str(base_strategy).strip().lower(),
+            )
+
+        raw_text_parts: List[str] = []
+        out_sentences: List[Dict[str, Any]] = []
+        asr_call_count = 0
         for seg in turns:
             try:
                 start_ms = int(seg.get("start", 0) or 0)
@@ -1556,59 +1597,68 @@ class TranscriptionEngine:
             if end_ms < start_ms:
                 end_ms = start_ms
 
-            if max_turn_duration_ms > 0 and (end_ms - start_ms) > max_turn_duration_ms:
-                cursor = start_ms
-                while cursor < end_ms:
-                    sub_end = min(cursor + max_turn_duration_ms, end_ms)
-                    normalized_turns.append(
-                        {
-                            "speaker": seg.get("speaker"),
-                            "speaker_id": seg.get("speaker_id"),
-                            "start": cursor,
-                            "end": sub_end,
-                            "text": "",
-                            "sentence_count": 1,
-                        }
-                    )
-                    cursor = sub_end
-            else:
-                normalized_turns.append(
-                    {
-                        "speaker": seg.get("speaker"),
-                        "speaker_id": seg.get("speaker_id"),
-                        "start": start_ms,
-                        "end": end_ms,
-                        "text": "",
-                        "sentence_count": int(seg.get("sentence_count", 1) or 1),
-                    }
-                )
-
-        if max_turns > 0 and len(normalized_turns) > max_turns:
-            return None
-
-        raw_text_parts: List[str] = []
-        out_sentences: List[Dict[str, Any]] = []
-        for seg in normalized_turns:
-            start_ms = int(seg.get("start", 0) or 0)
-            end_ms = int(seg.get("end", start_ms) or start_ms)
-            pcm_slice = slice_pcm16le(pcm16le, start_ms=start_ms, end_ms=end_ms)
-            if not pcm_slice:
+            pcm_turn = slice_pcm16le(pcm16le, start_ms=start_ms, end_ms=end_ms)
+            if not pcm_turn:
                 continue
 
-            raw = backend.transcribe(
-                pcm_slice,
-                hotwords=injection_hotwords,
-                with_speaker=False,
-                **effective_backend_kwargs,
-            )
-            raw_seg_text = str((raw or {}).get("text", "") or "")
-            raw_text_parts.append(raw_seg_text)
+            raw_turn_text = ""
+            if max_turn_duration_ms > 0 and (end_ms - start_ms) > max_turn_duration_ms and turn_chunker is not None:
+                from src.core.audio.pcm import pcm16le_bytes_to_float32
+                from src.core.text_processor.text_merge import merge_by_text
 
-            seg_text = raw_seg_text
-            all_similars: List[Tuple[str, str, float]] = []
+                # Split by silence (prefer) + overlap within this single-speaker turn.
+                audio_f32 = pcm16le_bytes_to_float32(pcm_turn)
+                chunks = turn_chunker.split(audio_f32, sample_rate=16000)
+
+                if max_turns > 0 and (asr_call_count + len(chunks)) > max_turns:
+                    return None
+
+                for _chunk_audio, start_sample, end_sample in chunks:
+                    try:
+                        start_i = int(start_sample)
+                    except (TypeError, ValueError):
+                        start_i = 0
+                    try:
+                        end_i = int(end_sample)
+                    except (TypeError, ValueError):
+                        end_i = start_i
+                    if end_i <= start_i:
+                        continue
+
+                    start_b = max(0, start_i * 2)
+                    end_b = min(len(pcm_turn), end_i * 2)
+                    if end_b <= start_b:
+                        continue
+
+                    pcm_chunk = pcm_turn[start_b:end_b]
+                    raw = backend.transcribe(
+                        pcm_chunk,
+                        hotwords=injection_hotwords,
+                        with_speaker=False,
+                        **effective_backend_kwargs,
+                    )
+                    asr_call_count += 1
+                    raw_chunk_text = str((raw or {}).get("text", "") or "")
+                    raw_turn_text = merge_by_text(raw_turn_text, raw_chunk_text, overlap_chars=20)
+            else:
+                if max_turns > 0 and (asr_call_count + 1) > max_turns:
+                    return None
+
+                raw = backend.transcribe(
+                    pcm_turn,
+                    hotwords=injection_hotwords,
+                    with_speaker=False,
+                    **effective_backend_kwargs,
+                )
+                asr_call_count += 1
+                raw_turn_text = str((raw or {}).get("text", "") or "")
+
+            raw_text_parts.append(raw_turn_text)
+
+            # Apply corrections/postprocess after merge to avoid breaking overlap matching.
+            seg_text = raw_turn_text
             if apply_hotword:
-                seg_text, similars = self._apply_corrections(seg_text, post_processor=post_processor)
-                all_similars.extend(similars)
+                seg_text, _similars = self._apply_corrections(seg_text, post_processor=post_processor)
 
             speaker = seg.get("speaker")
             speaker_id = seg.get("speaker_id")
