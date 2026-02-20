@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.diarizer_service.routes import engine, router as diarizer_router
+import src.diarizer_service.routes as diarizer_routes
 from src.diarizer_service.schemas import HealthResponse
 
 
@@ -27,7 +27,7 @@ def _start_background_warmup() -> None:
         t0 = time.time()
         try:
             logger.info("Diarizer warmup started (model download/load)")
-            engine.load()
+            diarizer_routes.engine.load()
             logger.info(f"Diarizer warmup finished in {time.time() - t0:.2f}s")
         except Exception as e:
             logger.warning(f"Diarizer warmup failed (ignored): {e}")
@@ -44,7 +44,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="TingWu Diarizer Service", version="1.0.0", lifespan=lifespan)
 
-app.include_router(diarizer_router)
+app.include_router(diarizer_routes.router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])
