@@ -8,6 +8,13 @@
   基于 FunASR + CapsWriter-Offline 的高精度中文语音转写服务，包含完整的 Web 前端界面。
 </p>
 
+## 文档导航
+
+- 部署（从 0 → 全部跑起来）：`docs/DEPLOYMENT.md`
+- 多模型 / 多后端（profiles / 端口 / 说话人策略）：`docs/MODELS.md`
+- 常见问题排障（GPU / 下载 / 端口 / 性能）：`docs/TROUBLESHOOTING.md`
+- API 参考：`docs/API.md`
+
 ## 特性
 
 ### 核心功能
