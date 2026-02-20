@@ -229,7 +229,7 @@ export function TranscribeOptions() {
             {speakerStrategy && speakerStrategy !== 'native' && (
               <p className="text-xs text-muted-foreground">
                 {speakerStrategy === 'external'
-                  ? '将使用 external diarizer 生成说话人 turn；若 diarizer 不可用会自动降级。'
+                  ? '将使用 external diarizer 生成说话人 turn；若 diarizer 不可用会自动降级。可在 diarizer 容器设置 DIARIZER_NUM_SPEAKERS（或 DIARIZER_MIN/MAX_SPEAKERS）提升稳定性。'
                   : speakerStrategy === 'fallback_diarization'
                     ? '当前后端原生不支持说话人识别；将使用辅助服务生成分段并按 turn 转写。'
                     : speakerStrategy === 'fallback_backend'
@@ -412,6 +412,7 @@ export function TranscribeOptions() {
                       turn_merge_min_chars: 1,
                     },
                     postprocess: {
+                      acronym_merge_enable: true,
                       spacing_cjk_ascii_enable: true,
                       punc_convert_enable: true,
                       punc_merge_enable: true,
@@ -419,7 +420,7 @@ export function TranscribeOptions() {
                   })
                 }}
               >
-                会议（段落+格式）
+                会议（准确率优先）
               </Button>
 
               <div className="ml-auto flex items-center gap-2">
