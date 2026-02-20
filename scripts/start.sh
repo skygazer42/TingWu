@@ -33,7 +33,7 @@ case $MODE in
     models)
         PROFILE=${2:-}
         if [ -z "$PROFILE" ]; then
-            echo "Usage: $0 models <pytorch|onnx|sensevoice|gguf|qwen3|vibevoice|router>"
+            echo "Usage: $0 models <pytorch|onnx|sensevoice|gguf|whisper|diarizer|qwen3|vibevoice|router|all>"
             echo "Tip: vibevoice/router need VIBEVOICE_REPO_PATH=/path/to/VibeVoice"
             exit 1
         fi
@@ -46,6 +46,8 @@ case $MODE in
             onnx) MODEL_PORT=${PORT_ONNX:-8102} ;;
             sensevoice) MODEL_PORT=${PORT_SENSEVOICE:-8103} ;;
             gguf) MODEL_PORT=${PORT_GGUF:-8104} ;;
+            whisper) MODEL_PORT=${PORT_WHISPER:-8105} ;;
+            diarizer) MODEL_PORT=${PORT_DIARIZER:-8300} ;;
             qwen3) MODEL_PORT=${PORT_TINGWU_QWEN3:-8201} ;;
             vibevoice) MODEL_PORT=${PORT_TINGWU_VIBEVOICE:-8202} ;;
             router) MODEL_PORT=${PORT_TINGWU_ROUTER:-8200} ;;
@@ -55,6 +57,16 @@ case $MODE in
             echo ""
             echo "Service URL: http://localhost:${MODEL_PORT}"
             echo "API Docs: http://localhost:${MODEL_PORT}/docs"
+        elif [ "${PROFILE}" = "all" ]; then
+            echo ""
+            echo "Started multiple services (profile=all). Common ports:"
+            echo "  - PyTorch:   http://localhost:${PORT_PYTORCH:-8101}"
+            echo "  - ONNX:      http://localhost:${PORT_ONNX:-8102}"
+            echo "  - SenseVoice:http://localhost:${PORT_SENSEVOICE:-8103}"
+            echo "  - GGUF:      http://localhost:${PORT_GGUF:-8104}"
+            echo "  - Whisper:   http://localhost:${PORT_WHISPER:-8105}"
+            echo "  - Qwen3:     http://localhost:${PORT_TINGWU_QWEN3:-8201}"
+            echo "  - Diarizer:  http://localhost:${PORT_DIARIZER:-8300}"
         fi
         ;;
     *)
