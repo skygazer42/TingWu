@@ -22,11 +22,27 @@ def _env_str(key: str, default: str) -> str:
     return v if v else default
 
 
+def _env_int(key: str) -> int | None:
+    v = os.getenv(key)
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 # NOTE: keep this lightweight at import time (no heavy ML deps).
 engine = DiarizerEngine(
     model_id=_env_str("DIARIZER_MODEL", "pyannote/speaker-diarization-3.1"),
     device=_env_str("DEVICE", "cuda"),
     hf_token=(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN")),
+    num_speakers=_env_int("DIARIZER_NUM_SPEAKERS"),
+    min_speakers=_env_int("DIARIZER_MIN_SPEAKERS"),
+    max_speakers=_env_int("DIARIZER_MAX_SPEAKERS"),
 )
 
 

@@ -23,6 +23,9 @@ class DiarizerEngine:
         model_id: str,
         device: str = "cuda",
         hf_token: Optional[str] = None,
+        num_speakers: int | None = None,
+        min_speakers: int | None = None,
+        max_speakers: int | None = None,
     ) -> None:
         self.model_id = str(model_id or "").strip()
         if not self.model_id:
@@ -30,6 +33,18 @@ class DiarizerEngine:
 
         self.device = str(device or "cpu").strip() or "cpu"
         self.hf_token = str(hf_token).strip() if hf_token else None
+
+        self.num_speakers = int(num_speakers) if isinstance(num_speakers, int) else None
+        self.min_speakers = int(min_speakers) if isinstance(min_speakers, int) else None
+        self.max_speakers = int(max_speakers) if isinstance(max_speakers, int) else None
+
+        # Best-effort validation (avoid surprising crashes on startup).
+        if self.num_speakers is not None and self.num_speakers <= 0:
+            self.num_speakers = None
+        if self.min_speakers is not None and self.min_speakers <= 0:
+            self.min_speakers = None
+        if self.max_speakers is not None and self.max_speakers <= 0:
+            self.max_speakers = None
 
         self._load_lock = threading.Lock()
         self._loaded = False
@@ -97,7 +112,19 @@ class DiarizerEngine:
         audio = audio / 32768.0
         waveform = torch.from_numpy(audio).unsqueeze(0)
 
-        diarization = self._pipeline({"waveform": waveform, "sample_rate": sample_rate})
+        call_kwargs: Dict[str, int] = {}
+        if self.num_speakers is not None:
+            call_kwargs["num_speakers"] = self.num_speakers
+        if self.min_speakers is not None:
+            call_kwargs["min_speakers"] = self.min_speakers
+        if self.max_speakers is not None:
+            call_kwargs["max_speakers"] = self.max_speakers
+
+        try:
+            diarization = self._pipeline({"waveform": waveform, "sample_rate": sample_rate}, **call_kwargs)
+        except TypeError:
+            # Some pipeline variants might not accept speaker bounds; fall back to defaults.
+            diarization = self._pipeline({"waveform": waveform, "sample_rate": sample_rate})
 
         items = []
         try:
@@ -132,4 +159,3 @@ class DiarizerEngine:
             out.append({"spk": spk_id, "start": start_ms, "end": end_ms})
 
         return out
-
