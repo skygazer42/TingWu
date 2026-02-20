@@ -13,6 +13,32 @@ x-proxy-env: &proxy-env
   no_proxy: ${no_proxy:-localhost,127.0.0.1,::1}
 
 services:
+  # External diarizer (pyannote) - optional but recommended for meeting speaker turns.
+  tingwu-diarizer:
+    build:
+      context: .
+      dockerfile: Dockerfile.diarizer
+    image: tingwu-diarizer:latest
+    profiles: ["diarizer"]
+    container_name: tingwu-diarizer
+    ports:
+      - "${PORT_DIARIZER:-8300}:8000"
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+    environment:
+      <<: *proxy-env
+      HF_TOKEN: ${HF_TOKEN:-}
+      DEVICE: ${DIARIZER_DEVICE:-cuda}
+      DIARIZER_MODEL: ${DIARIZER_MODEL:-pyannote/speaker-diarization-3.1}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
   # Qwen3-ASR (OpenAI-compatible /v1/chat/completions)
   qwen3-asr:
     image: qwenllm/qwen3-asr:latest
@@ -100,6 +126,12 @@ services:
       NCPU: ${NCPU:-4}
       DEBUG: ${DEBUG:-false}
       HOTWORDS_THRESHOLD: ${HOTWORDS_THRESHOLD:-0.85}
+      SPEAKER_UNSUPPORTED_BEHAVIOR: ${SPEAKER_UNSUPPORTED_BEHAVIOR:-ignore}
+      SPEAKER_EXTERNAL_DIARIZER_ENABLE: ${SPEAKER_EXTERNAL_DIARIZER_ENABLE:-false}
+      SPEAKER_EXTERNAL_DIARIZER_BASE_URL: ${SPEAKER_EXTERNAL_DIARIZER_BASE_URL:-http://tingwu-diarizer:8000}
+      SPEAKER_EXTERNAL_DIARIZER_TIMEOUT_S: ${SPEAKER_EXTERNAL_DIARIZER_TIMEOUT_S:-60}
+      SPEAKER_EXTERNAL_DIARIZER_MAX_TURNS: ${SPEAKER_EXTERNAL_DIARIZER_MAX_TURNS:-200}
+      SPEAKER_EXTERNAL_DIARIZER_MAX_TURN_DURATION_S: ${SPEAKER_EXTERNAL_DIARIZER_MAX_TURN_DURATION_S:-25}
 
       # Remote ASR backend wiring
       ASR_BACKEND: ${ASR_BACKEND:-router}
